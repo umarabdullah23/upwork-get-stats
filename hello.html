@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Upwork Job Activity</title>
+		<link rel="stylesheet" href="popup.css" />
+	</head>
+	<body>
+		<div class="shell">
+			<header class="hero">
+				<p class="kicker">Upwork helper</p>
+				<h1>Job activity reader</h1>
+				<p class="sub">Read-only. Pulls data from the current tab only.</p>
+			</header>
+
+			<div class="actions">
+				<button id="read-page" class="primary" type="button">
+					Read current job page
+				</button>
+				<button id="copy-csv" class="ghost" type="button" disabled>
+					Copy CSV row
+				</button>
+			</div>
+
+			<section class="card">
+				<div class="field">
+					<span class="label">Name</span>
+					<span class="value" id="field-name">-</span>
+				</div>
+				<div class="field">
+					<span class="label">Link</span>
+					<span class="value" id="field-link">-</span>
+				</div>
+				<div class="field">
+					<span class="label">Date</span>
+					<span class="value" id="field-date">-</span>
+				</div>
+				<div class="field">
+					<span class="label">Proposals</span>
+					<span class="value" id="field-proposals">-</span>
+				</div>
+				<div class="field">
+					<span class="label">Invites sent</span>
+					<span class="value" id="field-invites">-</span>
+				</div>
+				<div class="field">
+					<span class="label">Interviewing</span>
+					<span class="value" id="field-interviewing">-</span>
+				</div>
+				<div class="field muted">
+					<span class="label">Last viewed by client</span>
+					<span class="value" id="field-last-viewed">-</span>
+				</div>
+				<div class="field muted">
+					<span class="label">Unanswered invites</span>
+					<span class="value" id="field-unanswered">-</span>
+				</div>
+			</section>
+
+			<p id="status" class="status">Open an Upwork job details page to begin.</p>
+		</div>
+
+		<script src="popup.js"></script>
+	</body>
+</html>
