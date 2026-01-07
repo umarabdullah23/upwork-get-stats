@@ -8,55 +8,146 @@
 	</head>
 	<body>
 		<div class="shell">
-			<header class="hero">
-				<p class="kicker">Upwork helper</p>
-				<h1>Job activity reader</h1>
-				<p class="sub">Read-only. Pulls data from the current tab only.</p>
-			</header>
-
-			<div class="actions">
-				<button id="read-page" class="primary" type="button">
-					Read current job page
-				</button>
-				<button id="copy-csv" class="ghost" type="button" disabled>
-					Copy CSV row
-				</button>
+		<header class="hero">
+			<p class="kicker">Upwork helper</p>
+			<h1>Job activity reader</h1>
+			<p class="sub">Read-only. Pulls data from the current tab only.</p>
+			<div class="bidder-field">
+				<label for="bidder-input">Bidder</label>
+				<input
+					id="bidder-input"
+					type="text"
+					list="bidder-suggestions"
+					placeholder="Bilal"
+					autocomplete="off"
+				/>
+				<datalist id="bidder-suggestions">
+					<option value="Bilal"></option>
+					<option value="Mehak"></option>
+				</datalist>
 			</div>
+		</header>
 
-			<section class="card">
-				<div class="field">
-					<span class="label">Name</span>
-					<span class="value" id="field-name">-</span>
+			<section class="card current-job" id="current-job-card">
+				<div class="current-job-header">
+					<div class="current-job-title">
+						<span class="label">Current job</span>
+						<span class="value" id="current-job-status">Not fetched yet</span>
+					</div>
+				<div class="current-job-actions" id="current-job-actions">
+					<button
+						id="toggle-job-details"
+						class="ghost tiny"
+						type="button"
+							disabled
+							aria-expanded="false"
+						>
+							View more
+						</button>
+						<button id="read-page" class="ghost tiny" type="button">
+							<span class="icon-inline" aria-hidden="true">
+								<svg viewBox="0 0 24 24">
+									<path
+										d="M17.65 6.35A7.95 7.95 0 0012 4V1L7 6l5 5V7a5 5 0 015 5 5 5 0 01-8.66 3.54l-1.42 1.42A7 7 0 1019 12c0-1.93-.78-3.68-2.05-4.95z"
+									/>
+								</svg>
+							</span>
+							Refetch
+						</button>
+					</div>
 				</div>
-				<div class="field">
-					<span class="label">Link</span>
-					<span class="value" id="field-link">-</span>
-				</div>
-				<div class="field">
-					<span class="label">Date</span>
-					<span class="value" id="field-date">-</span>
-				</div>
-				<div class="field">
-					<span class="label">Proposals</span>
-					<span class="value" id="field-proposals">-</span>
-				</div>
-				<div class="field">
-					<span class="label">Invites sent</span>
-					<span class="value" id="field-invites">-</span>
-				</div>
-				<div class="field">
-					<span class="label">Interviewing</span>
-					<span class="value" id="field-interviewing">-</span>
-				</div>
-				<div class="field muted">
-					<span class="label">Last viewed by client</span>
-					<span class="value" id="field-last-viewed">-</span>
-				</div>
-				<div class="field muted">
-					<span class="label">Unanswered invites</span>
-					<span class="value" id="field-unanswered">-</span>
+
+				<div id="job-details" class="job-details" hidden>
+					<div class="field">
+						<span class="label">Name</span>
+						<span class="value" id="field-name">-</span>
+					</div>
+					<div class="field">
+						<span class="label">Link</span>
+						<span class="value" id="field-link">-</span>
+					</div>
+					<div class="field">
+						<span class="label">Job ID</span>
+						<span class="value" id="field-job-id">-</span>
+					</div>
+					<div class="field">
+						<span class="label">Date</span>
+						<span class="value" id="field-date">-</span>
+					</div>
+					<div class="field">
+						<span class="label">Proposals</span>
+						<span class="value" id="field-proposals">-</span>
+					</div>
+					<div class="field">
+						<span class="label">Invites sent</span>
+						<span class="value" id="field-invites">-</span>
+					</div>
+					<div class="field">
+						<span class="label">Interviewing</span>
+						<span class="value" id="field-interviewing">-</span>
+					</div>
+					<div class="field muted">
+						<span class="label">Last viewed by client</span>
+						<span class="value" id="field-last-viewed">-</span>
+					</div>
+					<div class="field muted">
+						<span class="label">Unanswered invites</span>
+						<span class="value" id="field-unanswered">-</span>
+					</div>
 				</div>
 			</section>
+
+			<div class="cards">
+				<section class="card">
+					<h2>Google Sheets</h2>
+					<p class="hint">
+						Paste your Spreadsheet ID (or full URL) and the sheet tab name.
+					</p>
+					<div class="form-field">
+						<label for="spreadsheet-id">Spreadsheet ID or URL</label>
+						<div class="input-row">
+							<input
+								id="spreadsheet-id"
+								type="text"
+								placeholder="https://docs.google.com/spreadsheets/d/.../edit"
+							/>
+							<button
+								id="open-sheet"
+								class="icon-button"
+								type="button"
+								aria-label="Open spreadsheet in new tab"
+								disabled
+							>
+								<svg viewBox="0 0 24 24" aria-hidden="true">
+									<path
+										d="M14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42 9.3-9.29H14V3z"
+									/>
+									<path
+										d="M5 5h6v2H7v10h10v-4h2v6H5V5z"
+									/>
+								</svg>
+							</button>
+						</div>
+					</div>
+					<div class="form-field">
+						<label for="sheet-name">Sheet tab name</label>
+						<input id="sheet-name" type="text" placeholder="Sheet1" />
+					</div>
+					<div class="sheet-actions">
+						<div class="sheet-actions-row">
+							<button id="prepare-sheet" class="ghost tiny" type="button">
+								Prepare sheet
+							</button>
+						</div>
+						<button id="send-sheets" class="primary" type="button" disabled>
+							Send to Sheets
+						</button>
+						<button id="check-viewed" class="primary alt" type="button" hidden>
+							Update proposal views
+						</button>
+					</div>
+				</section>
+			</div>
 
 			<p id="status" class="status">Open an Upwork job details page to begin.</p>
 		</div>

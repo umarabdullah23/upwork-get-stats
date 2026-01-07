@@ -1,0 +1,4 @@
+# Secrets / credentials
+client_secret_*.json
+client_secret_*.apps.googleusercontent.com.json
+

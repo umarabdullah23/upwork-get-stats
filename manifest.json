@@ -1,14 +1,27 @@
 {
-	"name": "Upwork Activity Reader",
-	"description": "Read-only helper to capture job activity from the current Upwork tab.",
-	"version": "1.0",
-	"manifest_version": 3,
-	"action": {
-		"default_popup": "hello.html",
-		"default_icon": "hello_extensions.png"
-	},
-	"permissions": [
-		"activeTab",
-		"scripting"
-	]
+  "name": "Upwork Activity Reader",
+  "description": "Read-only helper to capture job activity from the current Upwork tab.",
+  "version": "1.0",
+  "manifest_version": 3,
+  "action": {
+    "default_popup": "hello.html",
+    "default_icon": "hello_extensions.png"
+  },
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "identity"
+  ],
+  "host_permissions": [
+    "https://script.google.com/*",
+    "https://script.googleusercontent.com/*",
+    "https://sheets.googleapis.com/*"
+  ],
+  "oauth2": {
+    "client_id": "260545613728-inkt5lof5d8mjhur8ab7vsfrnmfttkll.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/spreadsheets"
+    ]
+  }
 }
