@@ -10,7 +10,7 @@ const executeExtraction = (tabId) =>
 		chrome.scripting.executeScript(
 			{
 				target: { tabId },
-				func: extractUpworkJobData,
+				func: window.extractUpworkJobData,
 			},
 			(results) => {
 				if (chrome.runtime.lastError) {
@@ -27,7 +27,24 @@ const executeProposalScan = (tabId) =>
 		chrome.scripting.executeScript(
 			{
 				target: { tabId },
-				func: extractUpworkViewedProposals,
+				func: window.extractUpworkViewedProposals,
+			},
+			(results) => {
+				if (chrome.runtime.lastError) {
+					resolve({ ok: false, error: chrome.runtime.lastError.message });
+					return;
+				}
+				resolve(results && results[0] ? results[0].result : { ok: false });
+			}
+		);
+	});
+
+const executeConnectsHistoryScan = (tabId) =>
+	new Promise((resolve) => {
+		chrome.scripting.executeScript(
+			{
+				target: { tabId },
+				func: window.extractUpworkConnectsHistory,
 			},
 			(results) => {
 				if (chrome.runtime.lastError) {

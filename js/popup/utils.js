@@ -8,9 +8,18 @@ const detectModeFromUrl = (url) => {
 		if (/\/Proposals\.html$/i.test(path) || /\/test_data\/Proposals\.html$/i.test(path)) {
 			return "proposals";
 		}
+		if (
+			/\/ConnectsHistory\.html$/i.test(path) ||
+			/\/test_data\/ConnectsHistory\.html$/i.test(path)
+		) {
+			return "connects";
+		}
 		if (parsed.hostname.endsWith("upwork.com")) {
 			if (path.startsWith("/nx/proposals")) {
 				return "proposals";
+			}
+			if (path.startsWith("/nx/plans/connects/history")) {
+				return "connects";
 			}
 		}
 	} catch (error) {

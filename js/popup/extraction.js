@@ -1,4 +1,4 @@
-function extractUpworkJobData() {
+window.extractUpworkJobData = function extractUpworkJobData() {
 	const normalize = (value) =>
 		String(value || "")
 			.replace(/\s+/g, " ")
@@ -160,9 +160,9 @@ function extractUpworkJobData() {
 	}
 
 	return { ok: true, data };
-}
+};
 
-function extractUpworkViewedProposals() {
+window.extractUpworkViewedProposals = function extractUpworkViewedProposals() {
 	const normalize = (value) =>
 		String(value || "")
 			.replace(/\s+/g, " ")
@@ -200,4 +200,67 @@ function extractUpworkViewedProposals() {
 	}
 
 	return { ok: true, proposals: results };
-}
+};
+
+window.extractUpworkConnectsHistory = function extractUpworkConnectsHistory() {
+	const normalize = (value) =>
+		String(value || "")
+			.replace(/\s+/g, " ")
+			.trim();
+
+	const parseConnectsValue = (value) => {
+		const match = String(value || "").replace(/,/g, "").match(/[+-]?\d+/);
+		if (!match) {
+			return 0;
+		}
+		const parsed = Number(match[0]);
+		return Number.isFinite(parsed) ? parsed : 0;
+	};
+
+	const currentDate = new Date().toLocaleDateString("en-US", {
+		month: "short",
+		day: "numeric",
+		year: "numeric",
+	});
+
+	const rows = Array.from(
+		document.querySelectorAll("#connects-history-table tbody tr")
+	);
+	const entries = [];
+
+	for (const row of rows) {
+		const cells = row.querySelectorAll("td");
+		if (!cells.length) {
+			continue;
+		}
+		const dateText = currentDate;
+		const actionCell = cells[1];
+		const connectsCell = cells[cells.length - 1];
+		const link = actionCell?.querySelector("a[href*='/jobs/']") || null;
+		const href = link?.getAttribute("href") || "";
+		const match = href.match(/~(\d+)/);
+		const jobId = match ? match[1] : "";
+		const title = normalize(
+			actionCell?.querySelector("strong")?.textContent || link?.textContent
+		);
+		const connectsRaw = normalize(connectsCell?.textContent || "");
+		const connectsValue = parseConnectsValue(connectsRaw);
+		if (!jobId) {
+			continue;
+		}
+		entries.push({
+			jobId,
+			title,
+			link: href || "",
+			date: dateText,
+			connectsSpent: connectsValue < 0 ? Math.abs(connectsValue) : 0,
+			connectsRefund: connectsValue > 0 ? connectsValue : 0,
+		});
+	}
+
+	if (!entries.length) {
+		return { ok: false, error: "No connects history rows found." };
+	}
+
+	return { ok: true, entries };
+};

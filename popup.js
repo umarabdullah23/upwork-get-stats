@@ -108,11 +108,11 @@ const setMode = (mode) => {
 		if (toggleJobDetailsButton) {
 			toggleJobDetailsButton.hidden = true;
 		}
-		if (readButton) {
-			readButton.hidden = true;
-		}
 		if (currentJobActions) {
-			currentJobActions.hidden = true;
+			currentJobActions.hidden = false;
+		}
+		if (readButton) {
+			readButton.hidden = false;
 		}
 		if (sendSheetsButton) {
 			sendSheetsButton.hidden = true;
@@ -120,6 +120,38 @@ const setMode = (mode) => {
 		if (copyButton) {
 			copyButton.hidden = true;
 		}
+		checkViewedButton.textContent = "Update proposal views";
+		checkViewedButton.hidden = false;
+	} else if (mode === "connects") {
+		if (currentJobCard) {
+			currentJobCard.hidden = false;
+		}
+		if (currentJobStatus) {
+			currentJobStatus.textContent = "Connects history detected";
+			currentJobStatus.classList.remove("is-fetched");
+			currentJobStatus.classList.remove("is-empty");
+			currentJobStatus.classList.add("is-detected");
+		}
+		if (jobDetails) {
+			jobDetailsExpanded = false;
+			jobDetails.hidden = true;
+		}
+		if (toggleJobDetailsButton) {
+			toggleJobDetailsButton.hidden = true;
+		}
+		if (currentJobActions) {
+			currentJobActions.hidden = false;
+		}
+		if (readButton) {
+			readButton.hidden = false;
+		}
+		if (sendSheetsButton) {
+			sendSheetsButton.hidden = true;
+		}
+		if (copyButton) {
+			copyButton.hidden = true;
+		}
+		checkViewedButton.textContent = "Update connects history";
 		checkViewedButton.hidden = false;
 	} else {
 		if (currentJobCard) {
@@ -198,22 +230,25 @@ const openSpreadsheet = (id) => {
 };
 
 readButton.addEventListener("click", async () => {
+	if (uiMode !== "job") {
+		await refreshMode();
+		return;
+	}
 	setStatus("Reading current tab...", "");
 	const tab = await queryActiveTab();
 
-	if (!tab || !tab.id || !tab.url) {
+	if (!tab || !tab.id) {
 		setStatus("No active tab detected.", "warn");
-		return;
-	}
-
-	if (!tab.url.includes("upwork.com")) {
-		setStatus("Open an Upwork job details page first.", "warn");
 		return;
 	}
 
 	const result = await executeExtraction(tab.id);
 	if (!result.ok) {
-		setStatus(result.error || "Unable to read this page.", "error");
+		if (result.error === "No job activity found on this page.") {
+			setStatus("Open an Upwork job details page first.", "warn");
+		} else {
+			setStatus(result.error || "Unable to read this page.", "error");
+		}
 		return;
 	}
 
@@ -226,16 +261,11 @@ readButton.addEventListener("click", async () => {
 
 if (checkViewedButton) {
 	checkViewedButton.addEventListener("click", async () => {
-		setStatus("Scanning proposals page...", "");
+		setStatus("Scanning page...", "");
 		const tab = await queryActiveTab();
 
-		if (!tab || !tab.id || !tab.url) {
+		if (!tab || !tab.id) {
 			setStatus("No active tab detected.", "warn");
-			return;
-		}
-
-		if (detectModeFromUrl(tab.url) !== "proposals") {
-			setStatus("Open https://www.upwork.com/nx/proposals/ first.", "warn");
 			return;
 		}
 
@@ -244,67 +274,208 @@ if (checkViewedButton) {
 			return;
 		}
 
-		const scan = await executeProposalScan(tab.id);
+		const mode = detectModeFromUrl(tab.url || "");
+		if (mode === "proposals") {
+			const scan = await executeProposalScan(tab.id);
+			if (!scan.ok) {
+				setStatus(
+					scan.error || "Unable to scan proposals on this page.",
+					"error"
+				);
+				return;
+			}
+
+			const proposals = Array.isArray(scan.proposals) ? scan.proposals : [];
+			const viewed = proposals.filter(
+				(item) => item?.viewed && item?.proposalId
+			);
+			if (!viewed.length) {
+				setStatus("No 'Viewed by client' proposals found on this page.", "warn");
+				return;
+			}
+
+			setStatus(
+				`Found ${viewed.length} viewed proposal(s). Updating sheet...`,
+				""
+			);
+			const auth = await getAuthToken(true);
+			if (!auth.ok) {
+				setStatus(auth.error || "Google authorization failed.", "error");
+				return;
+			}
+
+			const idMap = await getProposalIdRowMap(
+				auth.token,
+				spreadsheetId,
+				sheetName
+			);
+			if (!idMap) {
+				setStatus("Unable to read Proposal ID column from the sheet.", "error");
+				return;
+			}
+
+			const matchedRows = [];
+			for (const item of viewed) {
+				const rowIndex = idMap.get(String(item.proposalId).trim());
+				if (rowIndex) {
+					matchedRows.push(rowIndex);
+				}
+			}
+
+			const uniqueRows = Array.from(new Set(matchedRows)).sort((a, b) => a - b);
+			if (!uniqueRows.length) {
+				setStatus(
+					`Found ${viewed.length} viewed proposal(s), but none matched the sheet's Proposal ID column.`,
+					"warn"
+				);
+				return;
+			}
+
+			const ok = await setReadCellsViewed(
+				auth.token,
+				spreadsheetId,
+				sheetName,
+				uniqueRows
+			);
+			if (!ok) {
+				setStatus("Failed to update the sheet formatting.", "error");
+				return;
+			}
+			setStatus(
+				`Marked ${uniqueRows.length} row(s) as read (green).`,
+				"success"
+			);
+			return;
+		}
+
+		if (mode !== "connects") {
+			setStatus("Open the connects history page first.", "warn");
+			return;
+		}
+
+		const scan = await executeConnectsHistoryScan(tab.id);
 		if (!scan.ok) {
-			setStatus(scan.error || "Unable to scan proposals on this page.", "error");
+			setStatus(scan.error || "Unable to scan connects history.", "error");
 			return;
 		}
 
-		const proposals = Array.isArray(scan.proposals) ? scan.proposals : [];
-		const viewed = proposals.filter((item) => item?.viewed && item?.proposalId);
-		if (!viewed.length) {
-			setStatus("No 'Viewed by client' proposals found on this page.", "warn");
+		const entries = Array.isArray(scan.entries) ? scan.entries : [];
+		if (!entries.length) {
+			setStatus("No connects history entries found.", "warn");
 			return;
 		}
 
-		setStatus(`Found ${viewed.length} viewed proposal(s). Updating sheet...`, "");
+		const totals = new Map();
+		for (const entry of entries) {
+			if (!entry?.jobId) {
+				continue;
+			}
+			const key = String(entry.jobId).trim();
+			if (!totals.has(key)) {
+				totals.set(key, {
+					jobId: key,
+					name: entry.title || "",
+					link: entry.link || "",
+					date: entry.date || "",
+					connectsSpent: 0,
+					connectsRefund: 0,
+				});
+			}
+			const target = totals.get(key);
+			target.connectsSpent += Number(entry.connectsSpent || 0);
+			target.connectsRefund += Number(entry.connectsRefund || 0);
+			if (!target.name && entry.title) {
+				target.name = entry.title;
+			}
+			if (!target.link && entry.link) {
+				target.link = entry.link;
+			}
+			if (!target.date && entry.date) {
+				target.date = entry.date;
+			}
+		}
+
+		if (!totals.size) {
+			setStatus("No connects history entries with job IDs found.", "warn");
+			return;
+		}
+
+		setStatus(`Found ${totals.size} job(s). Updating sheet...`, "");
 		const auth = await getAuthToken(true);
 		if (!auth.ok) {
 			setStatus(auth.error || "Google authorization failed.", "error");
 			return;
 		}
 
-		const idMap = await getProposalIdRowMap(
+		const connectsMap = await getConnectsRowMap(
 			auth.token,
 			spreadsheetId,
 			sheetName
 		);
-		if (!idMap) {
-			setStatus("Unable to read Proposal ID column from the sheet.", "error");
+		if (!connectsMap) {
+			setStatus("Unable to read Job ID column from the sheet.", "error");
 			return;
 		}
 
-		const matchedRows = [];
-		for (const item of viewed) {
-			const rowIndex = idMap.get(String(item.proposalId).trim());
-			if (rowIndex) {
-				matchedRows.push(rowIndex);
+		const updates = [];
+		const activeBidder = String(bidderInput?.value || bidder || "").trim();
+		let nextRowIndex = connectsMap.nextRowIndex;
+		for (const entry of totals.values()) {
+			const existing = connectsMap.map.get(entry.jobId);
+			if (existing) {
+				const parsedSpent = Number(
+					String(existing.connectsSpent || "").replace(/[^0-9.-]/g, "")
+				);
+				const parsedRefund = Number(
+					String(existing.connectsRefund || "").replace(/[^0-9.-]/g, "")
+				);
+				const nextSpent =
+					(Number.isFinite(parsedSpent) ? parsedSpent : 0) +
+					entry.connectsSpent;
+				const nextRefund =
+					(Number.isFinite(parsedRefund) ? parsedRefund : 0) +
+					entry.connectsRefund;
+				if (activeBidder) {
+					updates.push({
+						range: `'${normalizeSheetName(sheetName).replace(/'/g, "''")}'!C${existing.rowIndex}:C${existing.rowIndex}`,
+						values: [[activeBidder]],
+					});
+				}
+				updates.push({
+					range: `'${normalizeSheetName(sheetName).replace(/'/g, "''")}'!X${existing.rowIndex}:Y${existing.rowIndex}`,
+					values: [[nextSpent || "", nextRefund || ""]],
+				});
+				continue;
 			}
+
+			const row = buildConnectsRow({
+				date: entry.date,
+				name: entry.name,
+				link: entry.link,
+				bidder: activeBidder,
+				jobId: entry.jobId,
+				connectsSpent: entry.connectsSpent || "",
+				connectsRefund: entry.connectsRefund || "",
+				proposalId: "--",
+			});
+			updates.push({
+				range: `'${normalizeSheetName(sheetName).replace(/'/g, "''")}'!A${nextRowIndex}:Y${nextRowIndex}`,
+				values: [row],
+			});
+			nextRowIndex += 1;
 		}
 
-		const uniqueRows = Array.from(new Set(matchedRows)).sort((a, b) => a - b);
-		if (!uniqueRows.length) {
-			setStatus(
-				`Found ${viewed.length} viewed proposal(s), but none matched the sheet's Proposal ID column.`,
-				"warn"
-			);
-			return;
-		}
-
-		const ok = await setReadCellsViewed(
+		const response = await batchUpdateValues(
 			auth.token,
 			spreadsheetId,
-			sheetName,
-			uniqueRows
+			updates
 		);
-		if (!ok) {
-			setStatus("Failed to update the sheet formatting.", "error");
+		if (!response.ok) {
+			setStatus(`Sheets API error ${response.status}.`, "error");
 			return;
 		}
-		setStatus(
-			`Marked ${uniqueRows.length} row(s) as read (green).`,
-			"success"
-		);
+
+		setStatus("Connects history updated.", "success");
 	});
 }
 
@@ -359,8 +530,8 @@ prepareSheetButton.addEventListener("click", async () => {
 		setStatus(`Sheets API error ${headerResponse.status}.`, "error");
 		return;
 	}
-	await setHeaderBold(auth.token, spreadsheetId, sheetName, 23);
-	await clearBodyBold(auth.token, spreadsheetId, sheetName, 23, 1000);
+	await setHeaderBold(auth.token, spreadsheetId, sheetName, 25);
+	await clearBodyBold(auth.token, spreadsheetId, sheetName, 25, 1000);
 	await setBodyColumnColors(auth.token, spreadsheetId, sheetName, 1000);
 	await freezeHeaderRow(auth.token, spreadsheetId, sheetName);
 	await ensureBidderDropdown(auth.token, spreadsheetId, sheetName);
@@ -456,7 +627,7 @@ sendSheetsButton.addEventListener("click", async () => {
 			activeToken,
 			spreadsheetId,
 			sheetName,
-			23,
+			25,
 			clearUntil
 		);
 		setStatus("Row added to Google Sheets.", "success");
@@ -535,19 +706,45 @@ const refreshMode = async () => {
 		);
 		return;
 	}
-	if (!tab || !tab.id || !tab.url) {
-		setStatus("No active tab detected.", "warn");
+	if (mode === "connects") {
+		if (!tab || !tab.id || !tab.url) {
+			setStatus("No active tab detected.", "warn");
+			return;
+		}
+
+		setStatus("Scanning connects history...", "");
+		const scan = await executeConnectsHistoryScan(tab.id);
+		if (!scan.ok) {
+			setStatus(scan.error || "Unable to scan connects history.", "error");
+			return;
+		}
+		const entries = Array.isArray(scan.entries) ? scan.entries : [];
+		const jobIds = new Set(
+			entries.map((entry) => String(entry?.jobId || "").trim()).filter(Boolean)
+		);
+		if (!entries.length) {
+			setStatus("No connects history entries found.", "warn");
+			return;
+		}
+		setStatus(
+			`Found ${jobIds.size || entries.length} job(s). Click "Update connects history" to save.`,
+			"success"
+		);
 		return;
 	}
-	if (!tab.url.includes("upwork.com")) {
-		setStatus("Open an Upwork job details page to begin.", "");
+	if (!tab || !tab.id) {
+		setStatus("No active tab detected.", "warn");
 		return;
 	}
 
 	setStatus("Reading current tab...", "");
 	const result = await executeExtraction(tab.id);
 	if (!result.ok) {
-		setStatus(result.error || "Unable to read this page.", "error");
+		if (result.error === "No job activity found on this page.") {
+			setStatus("Open an Upwork job details page to begin.", "");
+		} else {
+			setStatus(result.error || "Unable to read this page.", "error");
+		}
 		return;
 	}
 

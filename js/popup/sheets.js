@@ -39,6 +39,8 @@ const toCsvRow = (data) =>
 		data.proposals,
 		data.jobId,
 		data.proposalId || "--",
+		"",
+		"",
 	]
 		.map(formatCsvField)
 		.join(",");
@@ -75,6 +77,45 @@ const buildSheetRow = (data) => {
 		data.proposals || "",
 		data.jobId || "",
 		data.proposalId || "--",
+		"",
+		"",
+	];
+};
+
+const buildConnectsRow = (data) => {
+	const safeName = String(data.name || "").replace(/"/g, '""');
+	const safeLink = String(data.link || "").replace(/"/g, '""');
+	const nameCell =
+		safeName && safeLink
+			? `=HYPERLINK("${safeLink}","${safeName}")`
+			: data.name || "";
+
+	return [
+		formatSheetDate(data.date),
+		nameCell,
+		data.bidder || "",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		data.jobId || "",
+		data.proposalId || "--",
+		data.connectsSpent || "",
+		data.connectsRefund || "",
 	];
 };
 
@@ -198,6 +239,46 @@ const getProposalIdRowMap = async (token, id, name) => {
 	return map;
 };
 
+const getConnectsRowMap = async (token, id, name) => {
+	const sheet = normalizeSheetName(name).replace(/'/g, "''");
+	const ranges = [`'${sheet}'!V:V`, `'${sheet}'!X:Y`];
+	const url = new URL(
+		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+			id
+		)}/values:batchGet`
+	);
+	ranges.forEach((range) => url.searchParams.append("ranges", range));
+	const response = await fetch(url.toString(), {
+		headers: { Authorization: `Bearer ${token}` },
+	});
+	if (!response.ok) {
+		return null;
+	}
+	const data = await response.json();
+	const valueRanges = data.valueRanges || [];
+	const jobIdValues = valueRanges[0]?.values || [];
+	const connectsValues = valueRanges[1]?.values || [];
+	const map = new Map();
+	const rowCount = Math.max(jobIdValues.length, connectsValues.length);
+	for (let i = 1; i < rowCount; i += 1) {
+		const jobId = String(jobIdValues[i]?.[0] || "").trim();
+		if (!jobId) {
+			continue;
+		}
+		const connectsSpent = connectsValues[i]?.[0] || "";
+		const connectsRefund = connectsValues[i]?.[1] || "";
+		map.set(jobId, {
+			rowIndex: i + 1,
+			connectsSpent,
+			connectsRefund,
+		});
+	}
+	return {
+		map,
+		nextRowIndex: rowCount ? rowCount + 1 : 2,
+	};
+};
+
 const getCellValue = async (token, id, name, cell) => {
 	if (!cell) {
 		return "";
@@ -265,7 +346,7 @@ const setReadCellsViewed = async (token, id, name, rowIndexes) => {
 const updateRow = async (token, id, name, rowIndex, row) => {
 	const normalized = normalizeSheetName(name);
 	const escaped = normalized.replace(/'/g, "''");
-	const range = `'${escaped}'!A${rowIndex}:W${rowIndex}`;
+	const range = `'${escaped}'!A${rowIndex}:Y${rowIndex}`;
 	const url = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
 			id
@@ -279,6 +360,55 @@ const updateRow = async (token, id, name, rowIndex, row) => {
 			"Content-Type": "application/json",
 		},
 		body: JSON.stringify({ values: [row] }),
+	});
+};
+
+const batchUpdateValues = async (token, id, ranges) => {
+	if (!ranges.length) {
+		return { ok: true, status: 200 };
+	}
+	const url = new URL(
+		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+			id
+		)}/values:batchUpdate`
+	);
+	url.searchParams.set("valueInputOption", "USER_ENTERED");
+	return fetch(url.toString(), {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${token}`,
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify({ data: ranges }),
+	});
+};
+
+const updateConnectsColumns = async (
+	token,
+	id,
+	name,
+	rowIndex,
+	connectsSpent,
+	connectsRefund
+) => {
+	const normalized = normalizeSheetName(name);
+	const escaped = normalized.replace(/'/g, "''");
+	const range = `'${escaped}'!X${rowIndex}:Y${rowIndex}`;
+	const url = new URL(
+		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+			id
+		)}/values/${encodeURIComponent(range)}`
+	);
+	url.searchParams.set("valueInputOption", "USER_ENTERED");
+	return fetch(url.toString(), {
+		method: "PUT",
+		headers: {
+			Authorization: `Bearer ${token}`,
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify({
+			values: [[connectsSpent || "", connectsRefund || ""]],
+		}),
 	});
 };
 
@@ -370,6 +500,8 @@ const setHeaders = async (token, id, name) => {
 		"Proposals",
 		"Job ID",
 		"Proposal ID",
+		"Connects Spent",
+		"Connects Refund",
 	];
 	return fetch(url.toString(), {
 		method: "PUT",
