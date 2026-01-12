@@ -506,7 +506,33 @@ const refreshMode = async () => {
 	setMode(mode);
 	setButtons();
 	if (mode === "proposals") {
-		setStatus("Open proposals page and click “Check proposal views”.", "");
+		if (!tab || !tab.id || !tab.url) {
+			setStatus("No active tab detected.", "warn");
+			return;
+		}
+
+		setStatus("Scanning proposals page...", "");
+		const scan = await executeProposalScan(tab.id);
+		if (!scan.ok) {
+			setStatus(scan.error || "Unable to scan proposals on this page.", "error");
+			return;
+		}
+
+		const proposals = Array.isArray(scan.proposals) ? scan.proposals : [];
+		const viewed = proposals.filter((item) => item?.viewed && item?.proposalId);
+
+		if (!viewed.length) {
+			setStatus(
+				`Found ${proposals.length} proposal(s), but none viewed by client yet.`,
+				"warn"
+			);
+			return;
+		}
+
+		setStatus(
+			`Found ${viewed.length} viewed proposal(s). Click "Update proposal views" to mark as read.`,
+			"success"
+		);
 		return;
 	}
 	if (!tab || !tab.id || !tab.url) {
