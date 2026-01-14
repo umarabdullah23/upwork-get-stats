@@ -10,6 +10,7 @@ const spreadsheetInput = document.getElementById("spreadsheet-id");
 const sheetNameInput = document.getElementById("sheet-name");
 const openSheetButton = document.getElementById("open-sheet");
 const prepareSheetButton = document.getElementById("prepare-sheet");
+const openTemplateButton = document.getElementById("open-template");
 const sendSheetsButton = document.getElementById("send-sheets");
 const statusEl = document.getElementById("status");
 const bidderInput = document.getElementById("bidder-input");
@@ -304,15 +305,17 @@ if (checkViewedButton) {
 				return;
 			}
 
-			const idMap = await getProposalIdRowMap(
-				auth.token,
-				spreadsheetId,
-				sheetName
-			);
-			if (!idMap) {
-				setStatus("Unable to read Proposal ID column from the sheet.", "error");
-				return;
-			}
+		const headers = await getSheetHeaders(auth.token, spreadsheetId, sheetName);
+		const idMap = await getProposalIdRowMap(
+			auth.token,
+			spreadsheetId,
+			sheetName,
+			headers
+		);
+		if (!idMap) {
+			setStatus("Unable to read Proposal ID column from the sheet.", "error");
+			return;
+		}
 
 			const matchedRows = [];
 			for (const item of viewed) {
@@ -331,12 +334,14 @@ if (checkViewedButton) {
 				return;
 			}
 
-			const ok = await setReadCellsViewed(
-				auth.token,
-				spreadsheetId,
-				sheetName,
-				uniqueRows
-			);
+		const readColumnIndex = getHeaderIndex(headers || [], "Read");
+		const ok = await setReadCellsViewed(
+			auth.token,
+			spreadsheetId,
+			sheetName,
+			uniqueRows,
+			readColumnIndex ? readColumnIndex - 1 : undefined
+		);
 			if (!ok) {
 				setStatus("Failed to update the sheet formatting.", "error");
 				return;
@@ -418,8 +423,11 @@ if (checkViewedButton) {
 		}
 
 		const updates = [];
+		const newRowUpdates = [];
+		const headers = connectsMap.headers || [];
 		const activeBidder = String(bidderInput?.value || bidder || "").trim();
 		let nextRowIndex = connectsMap.nextRowIndex;
+		const newRowIndexes = [];
 		for (const entry of totals.values()) {
 			const existing = connectsMap.map.get(entry.jobId);
 			if (existing) {
@@ -442,13 +450,13 @@ if (checkViewedButton) {
 					});
 				}
 				updates.push({
-					range: `'${normalizeSheetName(sheetName).replace(/'/g, "''")}'!X${existing.rowIndex}:Y${existing.rowIndex}`,
+					range: `'${normalizeSheetName(sheetName).replace(/'/g, "''")}'!${connectsMap.connectsSpentColumn}${existing.rowIndex}:${connectsMap.connectsRefundColumn}${existing.rowIndex}`,
 					values: [[nextSpent || "", nextRefund || ""]],
 				});
 				continue;
 			}
 
-			const row = buildConnectsRow({
+			const row = buildRowFromHeaders(headers, {
 				date: entry.date,
 				name: entry.name,
 				link: entry.link,
@@ -459,9 +467,14 @@ if (checkViewedButton) {
 				proposalId: "--",
 			});
 			updates.push({
-				range: `'${normalizeSheetName(sheetName).replace(/'/g, "''")}'!A${nextRowIndex}:Y${nextRowIndex}`,
+				range: `'${normalizeSheetName(sheetName).replace(/'/g, "''")}'!A${nextRowIndex}:${getColumnLetter(connectsMap.columnCount)}${nextRowIndex}`,
 				values: [row],
 			});
+			newRowUpdates.push({
+				range: `'${normalizeSheetName(sheetName).replace(/'/g, "''")}'!A${nextRowIndex}:${getColumnLetter(connectsMap.columnCount)}${nextRowIndex}`,
+				values: [row],
+			});
+			newRowIndexes.push(nextRowIndex);
 			nextRowIndex += 1;
 		}
 
@@ -473,6 +486,53 @@ if (checkViewedButton) {
 		if (!response.ok) {
 			setStatus(`Sheets API error ${response.status}.`, "error");
 			return;
+		}
+		if (newRowIndexes.length) {
+			const templateSheetId = await ensureTemplateSheet(
+				auth.token,
+				spreadsheetId
+			);
+			const targetSheetId = await getSheetId(
+				auth.token,
+				spreadsheetId,
+				sheetName
+			);
+			let appliedTemplate = false;
+			if (templateSheetId && targetSheetId !== null) {
+				appliedTemplate = await applyTemplateRowToRows(
+					auth.token,
+					spreadsheetId,
+					templateSheetId,
+					targetSheetId,
+					newRowIndexes,
+					DEFAULT_HEADER_COUNT
+				);
+			}
+			if (!appliedTemplate) {
+				await applyRowTemplatesInSheet(
+					auth.token,
+					spreadsheetId,
+					sheetName,
+					2,
+					newRowIndexes,
+					DEFAULT_HEADER_COUNT
+				);
+			}
+			await clearRowsValues(
+				auth.token,
+				spreadsheetId,
+				sheetName,
+				newRowIndexes[0],
+				newRowIndexes[newRowIndexes.length - 1],
+				DEFAULT_HEADER_COUNT
+			);
+			if (newRowUpdates.length) {
+				await batchUpdateValues(
+					auth.token,
+					spreadsheetId,
+					newRowUpdates
+				);
+			}
 		}
 
 		setStatus("Connects history updated.", "success");
@@ -505,6 +565,17 @@ openSheetButton.addEventListener("click", () => {
 	openSpreadsheet(nextId);
 });
 
+if (openTemplateButton) {
+	openTemplateButton.addEventListener("click", () => {
+		const templateId = window.TEMPLATE_SPREADSHEET_ID;
+		if (!templateId) {
+			setStatus("Reference sheet not configured.", "warn");
+			return;
+		}
+		openSpreadsheet(templateId);
+	});
+}
+
 spreadsheetInput.addEventListener("input", () => {
 	setButtons();
 	scheduleSaveSheetsSettings();
@@ -525,17 +596,62 @@ prepareSheetButton.addEventListener("click", async () => {
 		setStatus(auth.error || "Google authorization failed.", "error");
 		return;
 	}
+	await removeBlankHeaderColumn(
+		auth.token,
+		spreadsheetId,
+		sheetName,
+		18,
+		"Job Status"
+	);
+	const templateResult = await applyTemplateFormatting(
+		auth.token,
+		spreadsheetId,
+		sheetName
+	);
+	if (templateResult.ok) {
+		const headerResponse = await setHeaders(
+			auth.token,
+			spreadsheetId,
+			sheetName
+		);
+		if (!headerResponse.ok) {
+			setStatus(`Sheets API error ${headerResponse.status}.`, "error");
+			return;
+		}
+		await setHeaderBold(
+			auth.token,
+			spreadsheetId,
+			sheetName,
+			DEFAULT_HEADER_COUNT
+		);
+		await freezeHeaderRow(auth.token, spreadsheetId, sheetName);
+		setStatus("Sheet prepared from template.", "success");
+		return;
+	}
 	const headerResponse = await setHeaders(auth.token, spreadsheetId, sheetName);
 	if (!headerResponse.ok) {
 		setStatus(`Sheets API error ${headerResponse.status}.`, "error");
 		return;
 	}
-	await setHeaderBold(auth.token, spreadsheetId, sheetName, 25);
-	await clearBodyBold(auth.token, spreadsheetId, sheetName, 25, 1000);
+	await setHeaderBold(
+		auth.token,
+		spreadsheetId,
+		sheetName,
+		DEFAULT_HEADER_COUNT
+	);
+	await clearBodyBold(
+		auth.token,
+		spreadsheetId,
+		sheetName,
+		DEFAULT_HEADER_COUNT,
+		1000
+	);
 	await setBodyColumnColors(auth.token, spreadsheetId, sheetName, 1000);
 	await freezeHeaderRow(auth.token, spreadsheetId, sheetName);
 	await ensureBidderDropdown(auth.token, spreadsheetId, sheetName);
-	setStatus("Sheet prepared with headers and bidder dropdown.", "success");
+	await ensureJobStatusDropdown(auth.token, spreadsheetId, sheetName);
+	await ensureJobStatusColors(auth.token, spreadsheetId, sheetName);
+	setStatus("Sheet prepared with headers and dropdowns.", "success");
 });
 
 sendSheetsButton.addEventListener("click", async () => {
@@ -559,17 +675,27 @@ sendSheetsButton.addEventListener("click", async () => {
 
 	let row = null;
 	await ensureBidderDropdown(activeToken, spreadsheetId, sheetName);
+	const headers = await getSheetHeaders(
+		activeToken,
+		spreadsheetId,
+		sheetName
+	);
+	if (!headers) {
+		setStatus("Unable to read sheet headers.", "error");
+		return;
+	}
 	let response;
 	let existingRow = await findRowByJobId(
 		activeToken,
 		spreadsheetId,
 		sheetName,
-		currentData.jobId
+		currentData.jobId,
+		headers
 	);
 	if (existingRow) {
 		const [existingDate, existingCreatedSince] = await Promise.all([
 			getCellValue(activeToken, spreadsheetId, sheetName, `A${existingRow}`),
-			getCellValue(activeToken, spreadsheetId, sheetName, `S${existingRow}`),
+			getCellValue(activeToken, spreadsheetId, sheetName, `R${existingRow}`),
 		]);
 		if (existingDate) {
 			currentData.date = existingDate;
@@ -577,7 +703,7 @@ sendSheetsButton.addEventListener("click", async () => {
 		if (existingCreatedSince) {
 			currentData.jobCreatedSince = existingCreatedSince;
 		}
-		row = buildSheetRow(currentData);
+		row = buildRowFromHeaders(headers, currentData);
 		response = await updateRow(
 			activeToken,
 			spreadsheetId,
@@ -586,7 +712,7 @@ sendSheetsButton.addEventListener("click", async () => {
 			row
 		);
 	} else {
-		row = buildSheetRow(currentData);
+		row = buildRowFromHeaders(headers, currentData);
 		response = await appendRow(activeToken, spreadsheetId, sheetName, row);
 	}
 	if (response.status === 401 || response.status === 403) {
@@ -622,12 +748,59 @@ sendSheetsButton.addEventListener("click", async () => {
 		} catch (error) {
 			appendedRowIndex = null;
 		}
+		if (appendedRowIndex) {
+			const templateSheetId = await ensureTemplateSheet(
+				activeToken,
+				spreadsheetId
+			);
+			const targetSheetId = await getSheetId(
+				activeToken,
+				spreadsheetId,
+				sheetName
+			);
+			let appliedTemplate = false;
+			if (templateSheetId && targetSheetId !== null) {
+				appliedTemplate = await applyTemplateRowToRows(
+					activeToken,
+					spreadsheetId,
+					templateSheetId,
+					targetSheetId,
+					[appendedRowIndex],
+					DEFAULT_HEADER_COUNT
+				);
+			}
+			if (!appliedTemplate) {
+				await applyRowTemplatesInSheet(
+					activeToken,
+					spreadsheetId,
+					sheetName,
+					2,
+					[appendedRowIndex],
+					DEFAULT_HEADER_COUNT
+				);
+			}
+			await clearRowsValues(
+				activeToken,
+				spreadsheetId,
+				sheetName,
+				appendedRowIndex,
+				appendedRowIndex,
+				DEFAULT_HEADER_COUNT
+			);
+			await updateRow(
+				activeToken,
+				spreadsheetId,
+				sheetName,
+				appendedRowIndex,
+				row
+			);
+		}
 		const clearUntil = appendedRowIndex ? appendedRowIndex + 20 : 200;
 		await clearBodyBold(
 			activeToken,
 			spreadsheetId,
 			sheetName,
-			25,
+			DEFAULT_HEADER_COUNT,
 			clearUntil
 		);
 		setStatus("Row added to Google Sheets.", "success");
