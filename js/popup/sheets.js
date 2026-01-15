@@ -158,7 +158,6 @@ const DEFAULT_HEADERS = [
 ];
 const DEFAULT_HEADER_COUNT = DEFAULT_HEADERS.length;
 window.DEFAULT_HEADER_COUNT = DEFAULT_HEADER_COUNT;
-const EMPTY_ROW_SCAN_LIMIT = 300;
 const TEMPLATE_SHEET_TITLE = "__Upwork Template";
 
 const TEMPLATE_SPREADSHEET_ID =
@@ -200,11 +199,13 @@ const getSheetRows = async (
 	name,
 	columnCount,
 	startRow = 2,
-	endRow = EMPTY_ROW_SCAN_LIMIT
+	endRow = null
 ) => {
 	const escaped = normalizeSheetName(name).replace(/'/g, "''");
 	const endColumn = getColumnLetter(columnCount || DEFAULT_HEADER_COUNT);
-	const range = `'${escaped}'!A${startRow}:${endColumn}${endRow}`;
+	const range = Number.isFinite(endRow)
+		? `'${escaped}'!A${startRow}:${endColumn}${endRow}`
+		: `'${escaped}'!A${startRow}:${endColumn}`;
 	const url = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
 			id
@@ -233,14 +234,7 @@ const getEmptyRowIndexes = async (token, id, name, headers) => {
 		}
 	}
 	const jobStatusColumns = Array.from(jobStatusIndexes);
-	const rows = await getSheetRows(
-		token,
-		id,
-		name,
-		columnCount,
-		2,
-		EMPTY_ROW_SCAN_LIMIT
-	);
+	const rows = await getSheetRows(token, id, name, columnCount, 2);
 	if (!rows) {
 		return null;
 	}

@@ -207,6 +207,16 @@ window.extractUpworkConnectsHistory = function extractUpworkConnectsHistory() {
 		String(value || "")
 			.replace(/\s+/g, " ")
 			.trim();
+	const normalizeLink = (href) => {
+		if (!href) {
+			return "";
+		}
+		try {
+			return new URL(href, window.location.origin).toString();
+		} catch (error) {
+			return href;
+		}
+	};
 
 	const parseConnectsValue = (value) => {
 		const match = String(value || "").replace(/,/g, "").match(/[+-]?\d+/);
@@ -242,6 +252,7 @@ window.extractUpworkConnectsHistory = function extractUpworkConnectsHistory() {
 		const isBoosted = actionText.toLowerCase().includes("boosted");
 		const link = actionCell?.querySelector("a[href*='/jobs/']") || null;
 		const href = link?.getAttribute("href") || "";
+		const jobLink = normalizeLink(href);
 		const match = href.match(/~(\d+)/);
 		const jobId = match ? match[1] : "";
 		const title = normalize(
@@ -257,7 +268,7 @@ window.extractUpworkConnectsHistory = function extractUpworkConnectsHistory() {
 		entries.push({
 			jobId,
 			title,
-			link: href || "",
+			link: jobLink,
 			date: dateText,
 			isBoosted,
 			connectsSpent: isBoosted ? 0 : spent,
