@@ -236,6 +236,10 @@ window.extractUpworkConnectsHistory = function extractUpworkConnectsHistory() {
 		const dateText = currentDate;
 		const actionCell = cells[1];
 		const connectsCell = cells[cells.length - 1];
+		const actionText = normalize(
+			actionCell?.querySelector("small")?.textContent || ""
+		);
+		const isBoosted = actionText.toLowerCase().includes("boosted");
 		const link = actionCell?.querySelector("a[href*='/jobs/']") || null;
 		const href = link?.getAttribute("href") || "";
 		const match = href.match(/~(\d+)/);
@@ -248,13 +252,18 @@ window.extractUpworkConnectsHistory = function extractUpworkConnectsHistory() {
 		if (!jobId) {
 			continue;
 		}
+		const spent = connectsValue < 0 ? Math.abs(connectsValue) : 0;
+		const refund = connectsValue > 0 ? connectsValue : 0;
 		entries.push({
 			jobId,
 			title,
 			link: href || "",
 			date: dateText,
-			connectsSpent: connectsValue < 0 ? Math.abs(connectsValue) : 0,
-			connectsRefund: connectsValue > 0 ? connectsValue : 0,
+			isBoosted,
+			connectsSpent: isBoosted ? 0 : spent,
+			connectsRefund: isBoosted ? 0 : refund,
+			boostedConnectsSpent: isBoosted ? spent : 0,
+			boostedConnectsRefund: isBoosted ? refund : 0,
 		});
 	}
 

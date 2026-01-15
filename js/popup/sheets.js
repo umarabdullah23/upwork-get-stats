@@ -38,9 +38,11 @@ const toCsvRow = (data) =>
 		data.jobId,
 		data.proposals,
 		data.proposalId || "--",
-		data.connectsSpent || "",
-		data.connectsRefund || "",
-	]
+	data.connectsSpent || "",
+	data.connectsRefund || "",
+	data.boostedConnectsSpent || "",
+	data.boostedConnectsRefund || "",
+]
 		.map(formatCsvField)
 		.join(",");
 
@@ -77,6 +79,8 @@ const buildSheetRow = (data) => {
 		data.proposalId || "--",
 		data.connectsSpent || "",
 		data.connectsRefund || "",
+		data.boostedConnectsSpent || "",
+		data.boostedConnectsRefund || "",
 	];
 };
 
@@ -113,6 +117,8 @@ const buildConnectsRow = (data) => {
 		data.proposalId || "--",
 		data.connectsSpent || "",
 		data.connectsRefund || "",
+		data.boostedConnectsSpent || "",
+		data.boostedConnectsRefund || "",
 	];
 };
 
@@ -147,6 +153,8 @@ const DEFAULT_HEADERS = [
 	"Proposal ID",
 	"Connects Spent",
 	"Connects Refund",
+	"Boosted Connects Spent",
+	"Boosted Connects Refund",
 ];
 const DEFAULT_HEADER_COUNT = DEFAULT_HEADERS.length;
 window.DEFAULT_HEADER_COUNT = DEFAULT_HEADER_COUNT;
@@ -183,6 +191,85 @@ const getSheetHeaders = async (token, id, name) => {
 	}
 	const data = await response.json();
 	return data.values?.[0] || [];
+};
+
+const getSheetRows = async (
+	token,
+	id,
+	name,
+	columnCount,
+	startRow = 2,
+	endRow = 1000
+) => {
+	const escaped = normalizeSheetName(name).replace(/'/g, "''");
+	const endColumn = getColumnLetter(columnCount || DEFAULT_HEADER_COUNT);
+	const range = `'${escaped}'!A${startRow}:${endColumn}${endRow}`;
+	const url = new URL(
+		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+			id
+		)}/values/${encodeURIComponent(range)}`
+	);
+	const response = await fetch(url.toString(), {
+		headers: { Authorization: `Bearer ${token}` },
+	});
+	if (!response.ok) {
+		return null;
+	}
+	const data = await response.json();
+	return data.values || [];
+};
+
+const getEmptyRowIndexes = async (token, id, name, headers) => {
+	const resolvedHeaders = headers || (await getSheetHeaders(token, id, name));
+	if (!resolvedHeaders) {
+		return null;
+	}
+	const columnCount = resolvedHeaders.length || DEFAULT_HEADER_COUNT;
+	const jobStatusIndexes = new Set();
+	for (let i = 0; i < resolvedHeaders.length; i += 1) {
+		if (resolvedHeaders[i] === "Job Status") {
+			jobStatusIndexes.add(i);
+		}
+	}
+	const jobStatusColumns = Array.from(jobStatusIndexes);
+	const rows = await getSheetRows(token, id, name, columnCount, 2, 1000);
+	if (!rows) {
+		return null;
+	}
+	const emptyRows = [];
+	const jobStatusValuesByRow = new Map();
+	const isEmpty = (row) => {
+		for (let i = 0; i < columnCount; i += 1) {
+			if (jobStatusIndexes.has(i)) {
+				continue;
+			}
+			const value = row?.[i];
+			if (String(value || "").trim()) {
+				return false;
+			}
+		}
+		return true;
+	};
+	for (let i = 0; i < rows.length; i += 1) {
+		if (isEmpty(rows[i])) {
+			const rowIndex = i + 2;
+			emptyRows.push(rowIndex);
+			if (jobStatusColumns.length) {
+				const values = jobStatusColumns.map(
+					(columnIndex) => rows[i]?.[columnIndex] || ""
+				);
+				jobStatusValuesByRow.set(rowIndex, values);
+			}
+		}
+	}
+	return {
+		emptyRows,
+		nextRowIndex: rows.length ? rows.length + 2 : 2,
+		headers: resolvedHeaders,
+		columnCount,
+		jobStatusIndexes: jobStatusColumns,
+		jobStatusValuesByRow,
+	};
 };
 
 const getColumnValues = async (token, id, name, columnIndex, startRow = 2) => {
@@ -323,6 +410,10 @@ const buildRowFromHeaders = (headers, data) => {
 				return data.connectsSpent || "";
 			case "Connects Refund":
 				return data.connectsRefund || "";
+			case "Boosted Connects Spent":
+				return data.boostedConnectsSpent || "";
+			case "Boosted Connects Refund":
+				return data.boostedConnectsRefund || "";
 			default:
 				return "";
 		}
@@ -469,17 +560,37 @@ const getConnectsRowMap = async (token, id, name, headers) => {
 	const jobIdIndex = getHeaderIndex(resolvedHeaders, "Job ID");
 	const connectsSpentIndex = getHeaderIndex(resolvedHeaders, "Connects Spent");
 	const connectsRefundIndex = getHeaderIndex(resolvedHeaders, "Connects Refund");
+	const boostedConnectsSpentIndex = getHeaderIndex(
+		resolvedHeaders,
+		"Boosted Connects Spent"
+	);
+	const boostedConnectsRefundIndex = getHeaderIndex(
+		resolvedHeaders,
+		"Boosted Connects Refund"
+	);
 	if (!jobIdIndex || !connectsSpentIndex || !connectsRefundIndex) {
 		return null;
 	}
 	const sheet = normalizeSheetName(name).replace(/'/g, "''");
 	const jobIdColumn = getColumnLetter(jobIdIndex);
-	const connectsSpentColumn = getColumnLetter(connectsSpentIndex);
-	const connectsRefundColumn = getColumnLetter(connectsRefundIndex);
-	const ranges = [
-		`'${sheet}'!${jobIdColumn}:${jobIdColumn}`,
-		`'${sheet}'!${connectsSpentColumn}:${connectsRefundColumn}`,
+	const columnEntries = [
+		{ key: "connectsSpent", index: connectsSpentIndex },
+		{ key: "connectsRefund", index: connectsRefundIndex },
+		{ key: "boostedConnectsSpent", index: boostedConnectsSpentIndex },
+		{ key: "boostedConnectsRefund", index: boostedConnectsRefundIndex },
 	];
+	const ranges = [`'${sheet}'!${jobIdColumn}:${jobIdColumn}`];
+	const columnKeys = [];
+	const columnLetters = {};
+	for (const entry of columnEntries) {
+		if (!entry.index) {
+			continue;
+		}
+		const letter = getColumnLetter(entry.index);
+		columnLetters[`${entry.key}Column`] = letter;
+		columnKeys.push(entry.key);
+		ranges.push(`'${sheet}'!${letter}:${letter}`);
+	}
 	const url = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
 			id
@@ -495,20 +606,33 @@ const getConnectsRowMap = async (token, id, name, headers) => {
 	const data = await response.json();
 	const valueRanges = data.valueRanges || [];
 	const jobIdValues = valueRanges[0]?.values || [];
-	const connectsValues = valueRanges[1]?.values || [];
+	const columnValues = {};
+	for (let i = 0; i < columnKeys.length; i += 1) {
+		columnValues[columnKeys[i]] = valueRanges[i + 1]?.values || [];
+	}
 	const map = new Map();
-	const rowCount = Math.max(jobIdValues.length, connectsValues.length);
+	const lengths = [jobIdValues.length];
+	for (const values of Object.values(columnValues)) {
+		lengths.push(values.length);
+	}
+	const rowCount = Math.max(...lengths);
 	for (let i = 1; i < rowCount; i += 1) {
 		const jobId = String(jobIdValues[i]?.[0] || "").trim();
 		if (!jobId) {
 			continue;
 		}
-		const connectsSpent = connectsValues[i]?.[0] || "";
-		const connectsRefund = connectsValues[i]?.[1] || "";
+		const connectsSpent = columnValues.connectsSpent?.[i]?.[0] || "";
+		const connectsRefund = columnValues.connectsRefund?.[i]?.[0] || "";
+		const boostedConnectsSpent =
+			columnValues.boostedConnectsSpent?.[i]?.[0] || "";
+		const boostedConnectsRefund =
+			columnValues.boostedConnectsRefund?.[i]?.[0] || "";
 		map.set(jobId, {
 			rowIndex: i + 1,
 			connectsSpent,
 			connectsRefund,
+			boostedConnectsSpent,
+			boostedConnectsRefund,
 		});
 	}
 	return {
@@ -516,8 +640,10 @@ const getConnectsRowMap = async (token, id, name, headers) => {
 		nextRowIndex: rowCount ? rowCount + 1 : 2,
 		headers: resolvedHeaders,
 		columnCount: resolvedHeaders.length,
-		connectsSpentColumn,
-		connectsRefundColumn,
+		connectsSpentColumn: columnLetters.connectsSpentColumn,
+		connectsRefundColumn: columnLetters.connectsRefundColumn,
+		boostedConnectsSpentColumn: columnLetters.boostedConnectsSpentColumn,
+		boostedConnectsRefundColumn: columnLetters.boostedConnectsRefundColumn,
 	};
 };
 

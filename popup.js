@@ -15,6 +15,8 @@ const sendSheetsButton = document.getElementById("send-sheets");
 const statusEl = document.getElementById("status");
 const bidderInput = document.getElementById("bidder-input");
 
+const PREPARE_SHEET_CONFIRMATION = "umar";
+
 const fields = {
 	name: document.getElementById("field-name"),
 	link: document.getElementById("field-link"),
@@ -38,6 +40,50 @@ let jobDetailsExpanded = false;
 const setStatus = (message, tone = "") => {
 	statusEl.textContent = message;
 	statusEl.className = `status ${tone}`.trim();
+};
+
+const verifyPrepareSheetPassword = () => {
+	const entered = window.prompt("Enter password to prepare the sheet:");
+	if (entered === null) {
+		return false;
+	}
+	return entered === PREPARE_SHEET_CONFIRMATION;
+};
+
+const parseConnectsCellValue = (value) => {
+	const match = String(value || "").replace(/,/g, "").match(/[+-]?\d+(\.\d+)?/);
+	if (!match) {
+		return 0;
+	}
+	const parsed = Number(match[0]);
+	return Number.isFinite(parsed) ? Math.abs(parsed) : 0;
+};
+
+const formatConnectsValue = (value, kind) => {
+	const numeric = Number(value);
+	if (!Number.isFinite(numeric) || numeric <= 0) {
+		return "";
+	}
+	const prefix = kind === "refund" ? "+" : "-";
+	return `${prefix}${Math.abs(numeric)}`;
+};
+
+const applyExistingJobStatus = (row, emptyRowInfo, rowIndex) => {
+	if (!row || !emptyRowInfo || !rowIndex) {
+		return row;
+	}
+	const jobStatusIndexes = emptyRowInfo.jobStatusIndexes || [];
+	const statusValues = emptyRowInfo.jobStatusValuesByRow?.get(rowIndex);
+	if (!jobStatusIndexes.length || !statusValues) {
+		return row;
+	}
+	jobStatusIndexes.forEach((columnIndex, index) => {
+		const existing = String(statusValues[index] || "").trim();
+		if (existing) {
+			row[columnIndex] = existing;
+		}
+	});
+	return row;
 };
 
 const setFields = (data) => {
@@ -384,11 +430,17 @@ if (checkViewedButton) {
 					date: entry.date || "",
 					connectsSpent: 0,
 					connectsRefund: 0,
+					boostedConnectsSpent: 0,
+					boostedConnectsRefund: 0,
 				});
 			}
 			const target = totals.get(key);
 			target.connectsSpent += Number(entry.connectsSpent || 0);
 			target.connectsRefund += Number(entry.connectsRefund || 0);
+			target.boostedConnectsSpent += Number(entry.boostedConnectsSpent || 0);
+			target.boostedConnectsRefund += Number(
+				entry.boostedConnectsRefund || 0
+			);
 			if (!target.name && entry.title) {
 				target.name = entry.title;
 			}
@@ -421,38 +473,96 @@ if (checkViewedButton) {
 			setStatus("Unable to read Job ID column from the sheet.", "error");
 			return;
 		}
+		const needsBoostedColumns = Array.from(totals.values()).some(
+			(entry) =>
+				entry.boostedConnectsSpent > 0 || entry.boostedConnectsRefund > 0
+		);
+		if (
+			needsBoostedColumns &&
+			(!connectsMap.boostedConnectsSpentColumn ||
+				!connectsMap.boostedConnectsRefundColumn)
+		) {
+			setStatus(
+				"Sheet is missing boosted connects columns. Run Prepare sheet first.",
+				"warn"
+			);
+			return;
+		}
 
 		const updates = [];
 		const newRowUpdates = [];
 		const headers = connectsMap.headers || [];
 		const activeBidder = String(bidderInput?.value || bidder || "").trim();
-		let nextRowIndex = connectsMap.nextRowIndex;
+		const emptyRowInfo = await getEmptyRowIndexes(
+			auth.token,
+			spreadsheetId,
+			sheetName,
+			headers
+		);
+		if (!emptyRowInfo) {
+			setStatus("Unable to read sheet rows.", "error");
+			return;
+		}
+		const emptyRowQueue = [...emptyRowInfo.emptyRows];
+		let nextRowIndex = emptyRowInfo.nextRowIndex;
 		const newRowIndexes = [];
 		for (const entry of totals.values()) {
 			const existing = connectsMap.map.get(entry.jobId);
 			if (existing) {
-				const parsedSpent = Number(
-					String(existing.connectsSpent || "").replace(/[^0-9.-]/g, "")
+				const parsedSpent = parseConnectsCellValue(existing.connectsSpent);
+				const parsedRefund = parseConnectsCellValue(existing.connectsRefund);
+				const parsedBoostedSpent = parseConnectsCellValue(
+					existing.boostedConnectsSpent
 				);
-				const parsedRefund = Number(
-					String(existing.connectsRefund || "").replace(/[^0-9.-]/g, "")
+				const parsedBoostedRefund = parseConnectsCellValue(
+					existing.boostedConnectsRefund
 				);
-				const nextSpent =
-					(Number.isFinite(parsedSpent) ? parsedSpent : 0) +
-					entry.connectsSpent;
-				const nextRefund =
-					(Number.isFinite(parsedRefund) ? parsedRefund : 0) +
-					entry.connectsRefund;
+				const nextSpent = parsedSpent + entry.connectsSpent;
+				const nextRefund = parsedRefund + entry.connectsRefund;
+				const nextBoostedSpent =
+					parsedBoostedSpent + entry.boostedConnectsSpent;
+				const nextBoostedRefund =
+					parsedBoostedRefund + entry.boostedConnectsRefund;
+				const nextSpentValue = formatConnectsValue(nextSpent, "spent");
+				const nextRefundValue = formatConnectsValue(nextRefund, "refund");
+				const nextBoostedSpentValue = formatConnectsValue(
+					nextBoostedSpent,
+					"spent"
+				);
+				const nextBoostedRefundValue = formatConnectsValue(
+					nextBoostedRefund,
+					"refund"
+				);
 				if (activeBidder) {
 					updates.push({
 						range: `'${normalizeSheetName(sheetName).replace(/'/g, "''")}'!C${existing.rowIndex}:C${existing.rowIndex}`,
 						values: [[activeBidder]],
 					});
 				}
-				updates.push({
-					range: `'${normalizeSheetName(sheetName).replace(/'/g, "''")}'!${connectsMap.connectsSpentColumn}${existing.rowIndex}:${connectsMap.connectsRefundColumn}${existing.rowIndex}`,
-					values: [[nextSpent || "", nextRefund || ""]],
-				});
+				if (connectsMap.connectsSpentColumn) {
+					updates.push({
+						range: `'${normalizeSheetName(sheetName).replace(/'/g, "''")}'!${connectsMap.connectsSpentColumn}${existing.rowIndex}`,
+						values: [[nextSpentValue]],
+					});
+				}
+				if (connectsMap.connectsRefundColumn) {
+					updates.push({
+						range: `'${normalizeSheetName(sheetName).replace(/'/g, "''")}'!${connectsMap.connectsRefundColumn}${existing.rowIndex}`,
+						values: [[nextRefundValue]],
+					});
+				}
+				if (connectsMap.boostedConnectsSpentColumn) {
+					updates.push({
+						range: `'${normalizeSheetName(sheetName).replace(/'/g, "''")}'!${connectsMap.boostedConnectsSpentColumn}${existing.rowIndex}`,
+						values: [[nextBoostedSpentValue]],
+					});
+				}
+				if (connectsMap.boostedConnectsRefundColumn) {
+					updates.push({
+						range: `'${normalizeSheetName(sheetName).replace(/'/g, "''")}'!${connectsMap.boostedConnectsRefundColumn}${existing.rowIndex}`,
+						values: [[nextBoostedRefundValue]],
+					});
+				}
 				continue;
 			}
 
@@ -462,20 +572,35 @@ if (checkViewedButton) {
 				link: entry.link,
 				bidder: activeBidder,
 				jobId: entry.jobId,
-				connectsSpent: entry.connectsSpent || "",
-				connectsRefund: entry.connectsRefund || "",
+				connectsSpent: formatConnectsValue(entry.connectsSpent, "spent"),
+				connectsRefund: formatConnectsValue(entry.connectsRefund, "refund"),
+				boostedConnectsSpent: formatConnectsValue(
+					entry.boostedConnectsSpent,
+					"spent"
+				),
+				boostedConnectsRefund: formatConnectsValue(
+					entry.boostedConnectsRefund,
+					"refund"
+				),
 				proposalId: "--",
 			});
+			const useEmptyRow = emptyRowQueue.length > 0;
+			const targetRowIndex = useEmptyRow
+				? emptyRowQueue.shift()
+				: nextRowIndex;
+			if (!useEmptyRow) {
+				nextRowIndex += 1;
+			}
+			applyExistingJobStatus(row, emptyRowInfo, targetRowIndex);
 			updates.push({
-				range: `'${normalizeSheetName(sheetName).replace(/'/g, "''")}'!A${nextRowIndex}:${getColumnLetter(connectsMap.columnCount)}${nextRowIndex}`,
+				range: `'${normalizeSheetName(sheetName).replace(/'/g, "''")}'!A${targetRowIndex}:${getColumnLetter(connectsMap.columnCount)}${targetRowIndex}`,
 				values: [row],
 			});
 			newRowUpdates.push({
-				range: `'${normalizeSheetName(sheetName).replace(/'/g, "''")}'!A${nextRowIndex}:${getColumnLetter(connectsMap.columnCount)}${nextRowIndex}`,
+				range: `'${normalizeSheetName(sheetName).replace(/'/g, "''")}'!A${targetRowIndex}:${getColumnLetter(connectsMap.columnCount)}${targetRowIndex}`,
 				values: [row],
 			});
-			newRowIndexes.push(nextRowIndex);
-			nextRowIndex += 1;
+			newRowIndexes.push(targetRowIndex);
 		}
 
 		const response = await batchUpdateValues(
@@ -590,6 +715,10 @@ prepareSheetButton.addEventListener("click", async () => {
 		setStatus("Save your Sheets settings first.", "warn");
 		return;
 	}
+	if (!verifyPrepareSheetPassword()) {
+		setStatus("Sheet preparation canceled or password incorrect.", "warn");
+		return;
+	}
 	setStatus("Preparing sheet...", "");
 	const auth = await getAuthToken(true);
 	if (!auth.ok) {
@@ -674,6 +803,7 @@ sendSheetsButton.addEventListener("click", async () => {
 	let activeToken = auth.token;
 
 	let row = null;
+	let newRowIndex = null;
 	await ensureBidderDropdown(activeToken, spreadsheetId, sheetName);
 	const headers = await getSheetHeaders(
 		activeToken,
@@ -712,8 +842,26 @@ sendSheetsButton.addEventListener("click", async () => {
 			row
 		);
 	} else {
+		const emptyRowInfo = await getEmptyRowIndexes(
+			activeToken,
+			spreadsheetId,
+			sheetName,
+			headers
+		);
+		if (!emptyRowInfo) {
+			setStatus("Unable to read sheet rows.", "error");
+			return;
+		}
+		newRowIndex = emptyRowInfo.emptyRows[0] || emptyRowInfo.nextRowIndex;
 		row = buildRowFromHeaders(headers, currentData);
-		response = await appendRow(activeToken, spreadsheetId, sheetName, row);
+		row = applyExistingJobStatus(row, emptyRowInfo, newRowIndex);
+		response = await updateRow(
+			activeToken,
+			spreadsheetId,
+			sheetName,
+			newRowIndex,
+			row
+		);
 	}
 	if (response.status === 401 || response.status === 403) {
 		await removeCachedToken(activeToken);
@@ -732,7 +880,13 @@ sendSheetsButton.addEventListener("click", async () => {
 				row
 			);
 		} else {
-			response = await appendRow(activeToken, spreadsheetId, sheetName, row);
+			response = await updateRow(
+				activeToken,
+				spreadsheetId,
+				sheetName,
+				newRowIndex,
+				row
+			);
 		}
 	}
 
@@ -741,14 +895,8 @@ sendSheetsButton.addEventListener("click", async () => {
 		return;
 	}
 	if (!existingRow) {
-		let appendedRowIndex = null;
-		try {
-			const payload = await response.json();
-			appendedRowIndex = getRowIndexFromRange(payload?.updates?.updatedRange);
-		} catch (error) {
-			appendedRowIndex = null;
-		}
-		if (appendedRowIndex) {
+		const targetRowIndex = newRowIndex;
+		if (targetRowIndex) {
 			const templateSheetId = await ensureTemplateSheet(
 				activeToken,
 				spreadsheetId
@@ -765,7 +913,7 @@ sendSheetsButton.addEventListener("click", async () => {
 					spreadsheetId,
 					templateSheetId,
 					targetSheetId,
-					[appendedRowIndex],
+					[targetRowIndex],
 					DEFAULT_HEADER_COUNT
 				);
 			}
@@ -775,7 +923,7 @@ sendSheetsButton.addEventListener("click", async () => {
 					spreadsheetId,
 					sheetName,
 					2,
-					[appendedRowIndex],
+					[targetRowIndex],
 					DEFAULT_HEADER_COUNT
 				);
 			}
@@ -783,19 +931,19 @@ sendSheetsButton.addEventListener("click", async () => {
 				activeToken,
 				spreadsheetId,
 				sheetName,
-				appendedRowIndex,
-				appendedRowIndex,
+				targetRowIndex,
+				targetRowIndex,
 				DEFAULT_HEADER_COUNT
 			);
 			await updateRow(
 				activeToken,
 				spreadsheetId,
 				sheetName,
-				appendedRowIndex,
+				targetRowIndex,
 				row
 			);
 		}
-		const clearUntil = appendedRowIndex ? appendedRowIndex + 20 : 200;
+		const clearUntil = targetRowIndex ? targetRowIndex + 20 : 200;
 		await clearBodyBold(
 			activeToken,
 			spreadsheetId,
