@@ -42,6 +42,54 @@ const setStatus = (message, tone = "") => {
 	statusEl.className = `status ${tone}`.trim();
 };
 
+const requestAuthToken = async (interactive, timeoutMs = 15000) => {
+	const timeout = new Promise((resolve) => {
+		setTimeout(
+			() =>
+				resolve({
+					ok: false,
+					error: "Google authorization timed out.",
+				}),
+			timeoutMs
+		);
+	});
+	return Promise.race([getAuthToken(interactive), timeout]);
+};
+
+const withTimeout = (promise, timeoutMs, errorMessage) =>
+	Promise.race([
+		promise,
+		new Promise((_, reject) =>
+			setTimeout(() => reject(new Error(errorMessage)), timeoutMs)
+		),
+	]);
+
+const getValidationOptions = (dataValidation) => {
+	const condition = dataValidation?.condition;
+	if (!condition) {
+		return null;
+	}
+	const type = String(condition.type || "");
+	if (!type.includes("ONE_OF_LIST")) {
+		return null;
+	}
+	return (condition.values || [])
+		.map((value) => String(value?.userEnteredValue || "").trim())
+		.filter(Boolean);
+};
+
+const validationAllowsValue = (dataValidation, value) => {
+	const trimmed = String(value || "").trim();
+	if (!trimmed) {
+		return true;
+	}
+	const options = getValidationOptions(dataValidation);
+	if (!options || !options.length) {
+		return true;
+	}
+	return options.includes(trimmed);
+};
+
 const verifyPrepareSheetPassword = () => {
 	const entered = window.prompt("Enter password to prepare the sheet:");
 	if (entered === null) {
@@ -66,6 +114,28 @@ const formatConnectsValue = (value, kind) => {
 	}
 	const prefix = kind === "refund" ? "+" : "-";
 	return `${prefix}${Math.abs(numeric)}`;
+};
+
+const rowNeedsTemplateValidation = async (token, id, name, rowIndex) => {
+	if (!rowIndex) {
+		return false;
+	}
+	const bidderValidation = await getCellDataValidation(
+		token,
+		id,
+		name,
+		`C${rowIndex}`
+	);
+	if (!bidderValidation) {
+		return true;
+	}
+	const jobStatusValidation = await getCellDataValidation(
+		token,
+		id,
+		name,
+		`L${rowIndex}`
+	);
+	return !jobStatusValidation;
 };
 
 const applyExistingJobStatus = (row, emptyRowInfo, rowIndex) => {
@@ -345,23 +415,39 @@ if (checkViewedButton) {
 				`Found ${viewed.length} viewed proposal(s). Updating sheet...`,
 				""
 			);
-			const auth = await getAuthToken(true);
+			const auth = await requestAuthToken(true);
 			if (!auth.ok) {
 				setStatus(auth.error || "Google authorization failed.", "error");
 				return;
 			}
 
-		const headers = await getSheetHeaders(auth.token, spreadsheetId, sheetName);
-		const idMap = await getProposalIdRowMap(
-			auth.token,
-			spreadsheetId,
-			sheetName,
-			headers
-		);
-		if (!idMap) {
-			setStatus("Unable to read Proposal ID column from the sheet.", "error");
-			return;
-		}
+			setStatus("Reading sheet data...", "");
+			let headers;
+			let idMap;
+			try {
+				headers = await withTimeout(
+					getSheetHeaders(auth.token, spreadsheetId, sheetName),
+					20000,
+					"Sheet header read timed out."
+				);
+				idMap = await withTimeout(
+					getProposalIdRowMap(
+						auth.token,
+						spreadsheetId,
+						sheetName,
+						headers
+					),
+					20000,
+					"Sheet Proposal ID read timed out."
+				);
+			} catch (error) {
+				setStatus(error.message || "Sheet read timed out.", "error");
+				return;
+			}
+			if (!idMap) {
+				setStatus("Unable to read Proposal ID column from the sheet.", "error");
+				return;
+			}
 
 			const matchedRows = [];
 			for (const item of viewed) {
@@ -458,17 +544,24 @@ if (checkViewedButton) {
 		}
 
 		setStatus(`Found ${totals.size} job(s). Updating sheet...`, "");
-		const auth = await getAuthToken(true);
+		const auth = await requestAuthToken(true);
 		if (!auth.ok) {
 			setStatus(auth.error || "Google authorization failed.", "error");
 			return;
 		}
 
-		const connectsMap = await getConnectsRowMap(
-			auth.token,
-			spreadsheetId,
-			sheetName
-		);
+		setStatus("Reading sheet data...", "");
+		let connectsMap;
+		try {
+			connectsMap = await withTimeout(
+				getConnectsRowMap(auth.token, spreadsheetId, sheetName),
+				20000,
+				"Sheet Job ID read timed out."
+			);
+		} catch (error) {
+			setStatus(error.message || "Sheet read timed out.", "error");
+			return;
+		}
 		if (!connectsMap) {
 			setStatus("Unable to read Job ID column from the sheet.", "error");
 			return;
@@ -493,19 +586,31 @@ if (checkViewedButton) {
 		const newRowUpdates = [];
 		const headers = connectsMap.headers || [];
 		const activeBidder = String(bidderInput?.value || bidder || "").trim();
-		const emptyRowInfo = await getEmptyRowIndexes(
-			auth.token,
-			spreadsheetId,
-			sheetName,
-			headers
-		);
+		let emptyRowInfo;
+		try {
+			emptyRowInfo = await withTimeout(
+				getEmptyRowIndexes(
+					auth.token,
+					spreadsheetId,
+					sheetName,
+					headers
+				),
+				20000,
+				"Sheet row scan timed out."
+			);
+		} catch (error) {
+			setStatus(error.message || "Sheet read timed out.", "error");
+			return;
+		}
 		if (!emptyRowInfo) {
 			setStatus("Unable to read sheet rows.", "error");
 			return;
 		}
+		setStatus("Updating sheet...", "");
 		const emptyRowQueue = [...emptyRowInfo.emptyRows];
 		let nextRowIndex = emptyRowInfo.nextRowIndex;
 		const newRowIndexes = [];
+		const appendedRowIndexes = [];
 		for (const entry of totals.values()) {
 			const existing = connectsMap.map.get(entry.jobId);
 			if (existing) {
@@ -592,6 +697,9 @@ if (checkViewedButton) {
 				nextRowIndex += 1;
 			}
 			applyExistingJobStatus(row, emptyRowInfo, targetRowIndex);
+			if (!useEmptyRow) {
+				appendedRowIndexes.push(targetRowIndex);
+			}
 			updates.push({
 				range: `'${normalizeSheetName(sheetName).replace(/'/g, "''")}'!A${targetRowIndex}:${getColumnLetter(connectsMap.columnCount)}${targetRowIndex}`,
 				values: [row],
@@ -612,55 +720,92 @@ if (checkViewedButton) {
 			setStatus(`Sheets API error ${response.status}.`, "error");
 			return;
 		}
-		if (newRowIndexes.length) {
-			const templateSheetId = await ensureTemplateSheet(
-				auth.token,
-				spreadsheetId
-			);
+		setStatus("Formatting in progress...", "");
+		try {
 			const targetSheetId = await getSheetId(
 				auth.token,
 				spreadsheetId,
 				sheetName
 			);
-			let appliedTemplate = false;
-			if (templateSheetId && targetSheetId !== null) {
-				appliedTemplate = await applyTemplateRowToRows(
-					auth.token,
-					spreadsheetId,
-					templateSheetId,
-					targetSheetId,
-					newRowIndexes,
-					DEFAULT_HEADER_COUNT
-				);
-			}
-			if (!appliedTemplate) {
-				await applyRowTemplatesInSheet(
+			const rowsNeedingTemplate = [];
+			for (const rowIndex of newRowIndexes) {
+				const needsTemplate = await rowNeedsTemplateValidation(
 					auth.token,
 					spreadsheetId,
 					sheetName,
-					2,
-					newRowIndexes,
-					DEFAULT_HEADER_COUNT
+					rowIndex
 				);
+				if (needsTemplate) {
+					rowsNeedingTemplate.push(rowIndex);
+				}
 			}
-			await clearRowsValues(
-				auth.token,
-				spreadsheetId,
-				sheetName,
-				newRowIndexes[0],
-				newRowIndexes[newRowIndexes.length - 1],
-				DEFAULT_HEADER_COUNT
-			);
-			if (newRowUpdates.length) {
-				await batchUpdateValues(
+			if (rowsNeedingTemplate.length) {
+				let templateSheetId = await ensureTemplateSheet(
 					auth.token,
-					spreadsheetId,
-					newRowUpdates
+					spreadsheetId
 				);
+				const bidderValidation = templateSheetId
+					? await getCellDataValidation(
+							auth.token,
+							spreadsheetId,
+							"__Upwork Template",
+							"C2"
+						)
+					: null;
+				if (
+					templateSheetId &&
+					activeBidder &&
+					!validationAllowsValue(bidderValidation, activeBidder)
+				) {
+					templateSheetId = await ensureTemplateSheet(
+						auth.token,
+						spreadsheetId,
+						true
+					);
+				}
+				let appliedTemplate = false;
+				if (templateSheetId && targetSheetId !== null) {
+					appliedTemplate = await applyTemplateRowToRows(
+						auth.token,
+						spreadsheetId,
+						templateSheetId,
+						targetSheetId,
+						rowsNeedingTemplate,
+						DEFAULT_HEADER_COUNT
+					);
+				}
+				if (!appliedTemplate) {
+					await applyRowTemplatesInSheet(
+						auth.token,
+						spreadsheetId,
+						sheetName,
+						2,
+						rowsNeedingTemplate,
+						DEFAULT_HEADER_COUNT
+					);
+				}
+				for (const rowIndex of rowsNeedingTemplate) {
+					await clearRowsValues(
+						auth.token,
+						spreadsheetId,
+						sheetName,
+						rowIndex,
+						rowIndex,
+						DEFAULT_HEADER_COUNT
+					);
+				}
+				if (newRowUpdates.length) {
+					await batchUpdateValues(
+						auth.token,
+						spreadsheetId,
+						newRowUpdates
+					);
+				}
 			}
+			setStatus("Connects history updated.", "success");
+		} catch (error) {
+			setStatus("Connects history updated; formatting skipped.", "warn");
 		}
-
-		setStatus("Connects history updated.", "success");
 	});
 }
 
@@ -720,7 +865,7 @@ prepareSheetButton.addEventListener("click", async () => {
 		return;
 	}
 	setStatus("Preparing sheet...", "");
-	const auth = await getAuthToken(true);
+	const auth = await requestAuthToken(true);
 	if (!auth.ok) {
 		setStatus(auth.error || "Google authorization failed.", "error");
 		return;
@@ -777,7 +922,6 @@ prepareSheetButton.addEventListener("click", async () => {
 	);
 	await setBodyColumnColors(auth.token, spreadsheetId, sheetName, 1000);
 	await freezeHeaderRow(auth.token, spreadsheetId, sheetName);
-	await ensureBidderDropdown(auth.token, spreadsheetId, sheetName);
 	await ensureJobStatusDropdown(auth.token, spreadsheetId, sheetName);
 	await ensureJobStatusColors(auth.token, spreadsheetId, sheetName);
 	setStatus("Sheet prepared with headers and dropdowns.", "success");
@@ -795,7 +939,7 @@ sendSheetsButton.addEventListener("click", async () => {
 	}
 
 	setStatus("Connecting to Google...", "");
-	const auth = await getAuthToken(true);
+	const auth = await requestAuthToken(true);
 	if (!auth.ok) {
 		setStatus(auth.error || "Google authorization failed.", "error");
 		return;
@@ -804,16 +948,24 @@ sendSheetsButton.addEventListener("click", async () => {
 
 	let row = null;
 	let newRowIndex = null;
-	await ensureBidderDropdown(activeToken, spreadsheetId, sheetName);
-	const headers = await getSheetHeaders(
-		activeToken,
-		spreadsheetId,
-		sheetName
-	);
+	let emptyRowInfo = null;
+	setStatus("Reading sheet data...", "");
+	let headers;
+	try {
+		headers = await withTimeout(
+			getSheetHeaders(activeToken, spreadsheetId, sheetName),
+			20000,
+			"Sheet header read timed out."
+		);
+	} catch (error) {
+		setStatus(error.message || "Sheet read timed out.", "error");
+		return;
+	}
 	if (!headers) {
 		setStatus("Unable to read sheet headers.", "error");
 		return;
 	}
+	setStatus("Updating sheet...", "");
 	let response;
 	let existingRow = await findRowByJobId(
 		activeToken,
@@ -842,17 +994,29 @@ sendSheetsButton.addEventListener("click", async () => {
 			row
 		);
 	} else {
-		const emptyRowInfo = await getEmptyRowIndexes(
-			activeToken,
-			spreadsheetId,
-			sheetName,
-			headers
-		);
+		try {
+			emptyRowInfo = await withTimeout(
+				getEmptyRowIndexes(
+					activeToken,
+					spreadsheetId,
+					sheetName,
+					headers
+				),
+				20000,
+				"Sheet row scan timed out."
+			);
+		} catch (error) {
+			setStatus(error.message || "Sheet read timed out.", "error");
+			return;
+		}
 		if (!emptyRowInfo) {
 			setStatus("Unable to read sheet rows.", "error");
 			return;
 		}
-		newRowIndex = emptyRowInfo.emptyRows[0] || emptyRowInfo.nextRowIndex;
+		const hasEmptyRow = emptyRowInfo.emptyRows.length > 0;
+		newRowIndex = hasEmptyRow
+			? emptyRowInfo.emptyRows[0]
+			: emptyRowInfo.nextRowIndex;
 		row = buildRowFromHeaders(headers, currentData);
 		row = applyExistingJobStatus(row, emptyRowInfo, newRowIndex);
 		response = await updateRow(
@@ -865,7 +1029,7 @@ sendSheetsButton.addEventListener("click", async () => {
 	}
 	if (response.status === 401 || response.status === 403) {
 		await removeCachedToken(activeToken);
-		const retryAuth = await getAuthToken(true);
+		const retryAuth = await requestAuthToken(true);
 		if (!retryAuth.ok) {
 			setStatus("Google authorization failed.", "error");
 			return;
@@ -896,62 +1060,97 @@ sendSheetsButton.addEventListener("click", async () => {
 	}
 	if (!existingRow) {
 		const targetRowIndex = newRowIndex;
-		if (targetRowIndex) {
-			const templateSheetId = await ensureTemplateSheet(
-				activeToken,
-				spreadsheetId
-			);
-			const targetSheetId = await getSheetId(
-				activeToken,
-				spreadsheetId,
-				sheetName
-			);
-			let appliedTemplate = false;
-			if (templateSheetId && targetSheetId !== null) {
-				appliedTemplate = await applyTemplateRowToRows(
-					activeToken,
-					spreadsheetId,
-					templateSheetId,
-					targetSheetId,
-					[targetRowIndex],
-					DEFAULT_HEADER_COUNT
-				);
-			}
-			if (!appliedTemplate) {
-				await applyRowTemplatesInSheet(
+		const reusedRow = emptyRowInfo.emptyRows.includes(targetRowIndex);
+		setStatus("Formatting in progress...", "");
+		try {
+			let templateSheetId = null;
+			let targetSheetId = null;
+			const needsTemplate =
+				!reusedRow ||
+				(await rowNeedsTemplateValidation(
 					activeToken,
 					spreadsheetId,
 					sheetName,
-					2,
-					[targetRowIndex],
+					targetRowIndex
+				));
+			if (targetRowIndex && needsTemplate) {
+				templateSheetId = await ensureTemplateSheet(
+					activeToken,
+					spreadsheetId
+				);
+				const bidderValidation = templateSheetId
+					? await getCellDataValidation(
+							activeToken,
+							spreadsheetId,
+							"__Upwork Template",
+							"C2"
+						)
+					: null;
+				if (
+					templateSheetId &&
+					bidder &&
+					!validationAllowsValue(bidderValidation, bidder)
+				) {
+					templateSheetId = await ensureTemplateSheet(
+						activeToken,
+						spreadsheetId,
+						true
+					);
+				}
+				targetSheetId = await getSheetId(
+					activeToken,
+					spreadsheetId,
+					sheetName
+				);
+				let appliedTemplate = false;
+				if (templateSheetId && targetSheetId !== null) {
+					appliedTemplate = await applyTemplateRowToRows(
+						activeToken,
+						spreadsheetId,
+						templateSheetId,
+						targetSheetId,
+						[targetRowIndex],
+						DEFAULT_HEADER_COUNT
+					);
+				}
+				if (!appliedTemplate) {
+					await applyRowTemplatesInSheet(
+						activeToken,
+						spreadsheetId,
+						sheetName,
+						2,
+						[targetRowIndex],
+						DEFAULT_HEADER_COUNT
+					);
+				}
+				await clearRowsValues(
+					activeToken,
+					spreadsheetId,
+					sheetName,
+					targetRowIndex,
+					targetRowIndex,
 					DEFAULT_HEADER_COUNT
 				);
+				await updateRow(
+					activeToken,
+					spreadsheetId,
+					sheetName,
+					targetRowIndex,
+					row
+				);
 			}
-			await clearRowsValues(
+			const clearUntil = targetRowIndex ? targetRowIndex + 20 : 200;
+			await clearBodyBold(
 				activeToken,
 				spreadsheetId,
 				sheetName,
-				targetRowIndex,
-				targetRowIndex,
-				DEFAULT_HEADER_COUNT
+				DEFAULT_HEADER_COUNT,
+				clearUntil
 			);
-			await updateRow(
-				activeToken,
-				spreadsheetId,
-				sheetName,
-				targetRowIndex,
-				row
-			);
+			setStatus("Row added to Google Sheets.", "success");
+		} catch (error) {
+			setStatus("Row added; formatting skipped.", "warn");
 		}
-		const clearUntil = targetRowIndex ? targetRowIndex + 20 : 200;
-		await clearBodyBold(
-			activeToken,
-			spreadsheetId,
-			sheetName,
-			DEFAULT_HEADER_COUNT,
-			clearUntil
-		);
-		setStatus("Row added to Google Sheets.", "success");
 		return;
 	}
 	setStatus("Row updated in Google Sheets.", "success");
@@ -987,7 +1186,7 @@ if (bidderInput) {
 }
 
 loadBidder().then((storedBidder) => {
-	setBidder(storedBidder || "Bilal");
+	setBidder(storedBidder || "");
 });
 setFields(null);
 setButtons();

@@ -147,7 +147,6 @@ const DEFAULT_HEADERS = [
 	"Payment",
 	"Country",
 	"Job Created Since",
-	"Job Status",
 	"Job ID",
 	"Proposals",
 	"Proposal ID",
@@ -155,9 +154,11 @@ const DEFAULT_HEADERS = [
 	"Connects Refund",
 	"Boosted Connects Spent",
 	"Boosted Connects Refund",
+	"Total Net Connects",
 ];
 const DEFAULT_HEADER_COUNT = DEFAULT_HEADERS.length;
 window.DEFAULT_HEADER_COUNT = DEFAULT_HEADER_COUNT;
+const EMPTY_ROW_SCAN_LIMIT = 300;
 const TEMPLATE_SHEET_TITLE = "__Upwork Template";
 
 const TEMPLATE_SPREADSHEET_ID =
@@ -199,7 +200,7 @@ const getSheetRows = async (
 	name,
 	columnCount,
 	startRow = 2,
-	endRow = 1000
+	endRow = EMPTY_ROW_SCAN_LIMIT
 ) => {
 	const escaped = normalizeSheetName(name).replace(/'/g, "''");
 	const endColumn = getColumnLetter(columnCount || DEFAULT_HEADER_COUNT);
@@ -232,7 +233,14 @@ const getEmptyRowIndexes = async (token, id, name, headers) => {
 		}
 	}
 	const jobStatusColumns = Array.from(jobStatusIndexes);
-	const rows = await getSheetRows(token, id, name, columnCount, 2, 1000);
+	const rows = await getSheetRows(
+		token,
+		id,
+		name,
+		columnCount,
+		2,
+		EMPTY_ROW_SCAN_LIMIT
+	);
 	if (!rows) {
 		return null;
 	}
@@ -289,6 +297,83 @@ const getColumnValues = async (token, id, name, columnIndex, startRow = 2) => {
 	}
 	const data = await response.json();
 	return data.values || [];
+};
+
+const applyRowValidationsToRows = async (
+	token,
+	id,
+	name,
+	rowIndexes,
+	headers,
+	sourceSheetId = null
+) => {
+	if (!rowIndexes || !rowIndexes.length) {
+		return false;
+	}
+	const resolvedHeaders = headers || (await getSheetHeaders(token, id, name));
+	if (!resolvedHeaders) {
+		return false;
+	}
+	const destinationSheetId = await getSheetId(token, id, name);
+	if (destinationSheetId === null) {
+		return false;
+	}
+	const effectiveSourceSheetId =
+		sourceSheetId === null ? destinationSheetId : sourceSheetId;
+	const bidderIndex = getHeaderIndex(resolvedHeaders, "Bidder");
+	const jobStatusIndexes = [];
+	for (let i = 0; i < resolvedHeaders.length; i += 1) {
+		if (resolvedHeaders[i] === "Job Status") {
+			jobStatusIndexes.push(i + 1);
+		}
+	}
+	const columns = [];
+	if (bidderIndex) {
+		columns.push(bidderIndex);
+	}
+	jobStatusIndexes.forEach((index) => columns.push(index));
+	if (!columns.length) {
+		return true;
+	}
+	const requests = [];
+	rowIndexes.forEach((rowIndex) => {
+		columns.forEach((columnIndex) => {
+			requests.push({
+				copyPaste: {
+					source: {
+						sheetId: effectiveSourceSheetId,
+						startRowIndex: 1,
+						endRowIndex: 2,
+						startColumnIndex: columnIndex - 1,
+						endColumnIndex: columnIndex,
+					},
+					destination: {
+						sheetId: destinationSheetId,
+						startRowIndex: rowIndex - 1,
+						endRowIndex: rowIndex,
+						startColumnIndex: columnIndex - 1,
+						endColumnIndex: columnIndex,
+					},
+					pasteType: "PASTE_DATA_VALIDATION",
+					pasteOrientation: "NORMAL",
+				},
+			});
+		});
+	});
+	const url = new URL(
+		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+			id
+		)}:batchUpdate`
+	);
+	const response = await fetch(url.toString(), {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${token}`,
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify({ requests }),
+	});
+	return response.ok;
 };
 
 const removeBlankHeaderColumn = async (
@@ -1115,14 +1200,34 @@ const clearSheetValues = async (token, id, name, range) => {
 	});
 };
 
-const ensureTemplateSheet = async (token, destinationId) => {
+const ensureTemplateSheet = async (token, destinationId, forceRefresh = false) => {
 	const existingTemplateId = await getSheetId(
 		token,
 		destinationId,
 		TEMPLATE_SHEET_TITLE
 	);
-	if (existingTemplateId !== null) {
+	if (existingTemplateId !== null && !forceRefresh) {
 		return existingTemplateId;
+	}
+	if (existingTemplateId !== null && forceRefresh) {
+		const deleteUrl = new URL(
+			`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+				destinationId
+			)}:batchUpdate`
+		);
+		const deleteResponse = await fetch(deleteUrl.toString(), {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${token}`,
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				requests: [{ deleteSheet: { sheetId: existingTemplateId } }],
+			}),
+		});
+		if (!deleteResponse.ok) {
+			return null;
+		}
 	}
 	const templateSheetId = await getFirstSheetId(
 		token,
@@ -1547,8 +1652,8 @@ const ensureBidderDropdown = async (token, id, name) => {
 	if (sheetId === null) {
 		return;
 	}
-	const existingValidation = await getCellDataValidation(token, id, name, "C2");
-	if (existingValidation) {
+	const templateSheetId = await ensureTemplateSheet(token, id);
+	if (!templateSheetId) {
 		return;
 	}
 	const url = new URL(
@@ -1558,28 +1663,23 @@ const ensureBidderDropdown = async (token, id, name) => {
 	);
 	const requests = [
 		{
-			repeatCell: {
-				range: {
+			copyPaste: {
+				source: {
+					sheetId: templateSheetId,
+					startRowIndex: 1,
+					endRowIndex: 2,
+					startColumnIndex: 2,
+					endColumnIndex: 3,
+				},
+				destination: {
 					sheetId,
 					startRowIndex: 1,
 					endRowIndex: 1000,
 					startColumnIndex: 2,
 					endColumnIndex: 3,
 				},
-				cell: {
-					dataValidation: {
-						condition: {
-							type: "ONE_OF_LIST",
-							values: [
-								{ userEnteredValue: "Bilal" },
-								{ userEnteredValue: "Mehak" },
-							],
-						},
-						strict: true,
-						showCustomUi: true,
-					},
-				},
-				fields: "dataValidation",
+				pasteType: "PASTE_DATA_VALIDATION",
+				pasteOrientation: "NORMAL",
 			},
 		},
 	];
