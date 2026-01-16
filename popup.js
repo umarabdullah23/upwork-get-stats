@@ -10,6 +10,7 @@ const spreadsheetInput = document.getElementById("spreadsheet-id");
 const sheetNameInput = document.getElementById("sheet-name");
 const openSheetButton = document.getElementById("open-sheet");
 const prepareSheetButton = document.getElementById("prepare-sheet");
+const populateJobIdsButton = document.getElementById("populate-job-ids");
 const openTemplateButton = document.getElementById("open-template");
 const sendSheetsButton = document.getElementById("send-sheets");
 const statusEl = document.getElementById("status");
@@ -36,6 +37,7 @@ let bidder = "";
 let saveTimer = null;
 let uiMode = "job";
 let jobDetailsExpanded = false;
+let currentTabUrl = "";
 
 const setStatus = (message, tone = "") => {
 	statusEl.textContent = message;
@@ -63,6 +65,30 @@ const withTimeout = (promise, timeoutMs, errorMessage) =>
 			setTimeout(() => reject(new Error(errorMessage)), timeoutMs)
 		),
 	]);
+
+const isSheetUrl = (value) =>
+	/https?:\/\/docs\.google\.com\/spreadsheets/i.test(String(value || ""));
+
+const extractHyperlinkUrl = (value) => {
+	const text = String(value || "").trim();
+	if (!text) {
+		return "";
+	}
+	if (text.startsWith("=")) {
+		const match = text.match(/HYPERLINK\(\s*\"([^\"]+)\"/i);
+		return match ? match[1] : "";
+	}
+	return text;
+};
+
+const extractJobIdFromLink = (value) => {
+	const url = extractHyperlinkUrl(value);
+	if (!url) {
+		return "";
+	}
+	const match = url.match(/~([A-Za-z0-9]+)/);
+	return match ? match[1] : "";
+};
 
 const getValidationOptions = (dataValidation) => {
 	const condition = dataValidation?.condition;
@@ -198,6 +224,11 @@ const setButtons = () => {
 	}
 	sendSheetsButton.disabled = !currentData || !spreadsheetId;
 	openSheetButton.disabled = !getCurrentSpreadsheetId();
+	if (populateJobIdsButton) {
+		const showPopulate = isSheetUrl(currentTabUrl);
+		populateJobIdsButton.hidden = !showPopulate;
+		populateJobIdsButton.disabled = !showPopulate;
+	}
 	if (checkViewedButton) {
 		checkViewedButton.disabled = !spreadsheetId;
 	}
@@ -846,6 +877,116 @@ if (openTemplateButton) {
 	});
 }
 
+if (populateJobIdsButton) {
+	populateJobIdsButton.addEventListener("click", async () => {
+		if (!spreadsheetId) {
+			setStatus("Save your Sheets settings first.", "warn");
+			return;
+		}
+		setStatus("Connecting to Google...", "");
+		const auth = await requestAuthToken(true);
+		if (!auth.ok) {
+			setStatus(auth.error || "Google authorization failed.", "error");
+			return;
+		}
+		setStatus("Reading sheet data...", "");
+		let headers;
+		try {
+			headers = await withTimeout(
+				getSheetHeaders(auth.token, spreadsheetId, sheetName),
+				20000,
+				"Sheet header read timed out."
+			);
+		} catch (error) {
+			setStatus(error.message || "Sheet read timed out.", "error");
+			return;
+		}
+		if (!headers) {
+			setStatus("Unable to read sheet headers.", "error");
+			return;
+		}
+		const jobNameIndex = getHeaderIndex(headers, "Job Name");
+		const jobIdIndex = getHeaderIndex(headers, "Job ID");
+		if (!jobNameIndex || !jobIdIndex) {
+			setStatus("Sheet needs Job Name and Job ID columns.", "error");
+			return;
+		}
+		let jobNameValues;
+		let jobIdValues;
+		try {
+			[jobNameValues, jobIdValues] = await Promise.all([
+				withTimeout(
+					getColumnValues(
+						auth.token,
+						spreadsheetId,
+						sheetName,
+						jobNameIndex - 1,
+						2,
+						{ valueRenderOption: "FORMULA" }
+					),
+					20000,
+					"Sheet Job Name read timed out."
+				),
+				withTimeout(
+					getColumnValues(
+						auth.token,
+						spreadsheetId,
+						sheetName,
+						jobIdIndex - 1,
+						2
+					),
+					20000,
+					"Sheet Job ID read timed out."
+				),
+			]);
+		} catch (error) {
+			setStatus(error.message || "Sheet read timed out.", "error");
+			return;
+		}
+		if (!jobNameValues) {
+			setStatus("Unable to read Job Name column.", "error");
+			return;
+		}
+		const updates = [];
+		const rowCount = Math.max(
+			jobNameValues.length,
+			jobIdValues?.length || 0
+		);
+		const columnLetter = getColumnLetter(jobIdIndex);
+		const escapedName = normalizeSheetName(sheetName).replace(/'/g, "''");
+		for (let i = 0; i < rowCount; i += 1) {
+			const jobId = extractJobIdFromLink(jobNameValues[i]?.[0] || "");
+			if (!jobId) {
+				continue;
+			}
+			const existing = String(jobIdValues?.[i]?.[0] || "").trim();
+			if (existing === jobId) {
+				continue;
+			}
+			const rowIndex = i + 2;
+			updates.push({
+				range: `'${escapedName}'!${columnLetter}${rowIndex}`,
+				values: [[jobId]],
+			});
+		}
+		if (!updates.length) {
+			setStatus("Job IDs already up to date.", "success");
+			return;
+		}
+		setStatus("Populating job IDs...", "");
+		const response = await batchUpdateValues(
+			auth.token,
+			spreadsheetId,
+			updates
+		);
+		if (!response.ok) {
+			setStatus(`Sheets API error ${response.status}.`, "error");
+			return;
+		}
+		setStatus(`Job IDs populated (${updates.length}).`, "success");
+	});
+}
+
 spreadsheetInput.addEventListener("input", () => {
 	setButtons();
 	scheduleSaveSheetsSettings();
@@ -1193,6 +1334,7 @@ setButtons();
 
 const refreshMode = async () => {
 	const tab = await queryActiveTab();
+	currentTabUrl = tab?.url || "";
 	const mode = detectModeFromUrl(tab?.url || "");
 	setMode(mode);
 	setButtons();

@@ -274,15 +274,25 @@ const getEmptyRowIndexes = async (token, id, name, headers) => {
 	};
 };
 
-const getColumnValues = async (token, id, name, columnIndex, startRow = 2) => {
+const getColumnValues = async (
+	token,
+	id,
+	name,
+	columnIndex,
+	startRow = 2,
+	options = {}
+) => {
 	const escaped = normalizeSheetName(name).replace(/'/g, "''");
 	const letter = getColumnLetter(columnIndex + 1);
-	const range = `'${escaped}'!${letter}${startRow}:${letter}1000`;
+	const range = `'${escaped}'!${letter}${startRow}:${letter}`;
 	const url = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
 			id
 		)}/values/${encodeURIComponent(range)}`
 	);
+	if (options.valueRenderOption) {
+		url.searchParams.set("valueRenderOption", options.valueRenderOption);
+	}
 	const response = await fetch(url.toString(), {
 		headers: { Authorization: `Bearer ${token}` },
 	});
