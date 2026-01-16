@@ -456,6 +456,8 @@ const getHeaderIndex = (headers, name, occurrence = 1) => {
 	return null;
 };
 
+const normalizeJobName = (value) => String(value || "").trim();
+
 const buildRowFromHeaders = (headers, data) => {
 	let jobStatusCount = 0;
 	const safeName = String(data.name || "").replace(/"/g, '""');
@@ -641,6 +643,29 @@ const getProposalIdRowMap = async (token, id, name, headers) => {
 	return map;
 };
 
+const getJobNameRowMap = async (token, id, name, headers) => {
+	const resolvedHeaders = headers || (await getSheetHeaders(token, id, name));
+	if (!resolvedHeaders) {
+		return null;
+	}
+	const jobNameIndex = getHeaderIndex(resolvedHeaders, "Job Name");
+	if (!jobNameIndex) {
+		return null;
+	}
+	const values = await getColumnValues(token, id, name, jobNameIndex - 1, 2);
+	if (!values) {
+		return null;
+	}
+	const map = new Map();
+	for (let i = 0; i < values.length; i += 1) {
+		const normalized = normalizeJobName(values[i]?.[0] || "");
+		if (normalized && !map.has(normalized)) {
+			map.set(normalized, i + 2);
+		}
+	}
+	return map;
+};
+
 const getConnectsRowMap = async (token, id, name, headers) => {
 	const resolvedHeaders = headers || (await getSheetHeaders(token, id, name));
 	if (!resolvedHeaders) {
@@ -700,6 +725,7 @@ const getConnectsRowMap = async (token, id, name, headers) => {
 		columnValues[columnKeys[i]] = valueRanges[i + 1]?.values || [];
 	}
 	const map = new Map();
+	const rowsByIndex = new Map();
 	const lengths = [jobIdValues.length];
 	for (const values of Object.values(columnValues)) {
 		lengths.push(values.length);
@@ -707,15 +733,22 @@ const getConnectsRowMap = async (token, id, name, headers) => {
 	const rowCount = Math.max(...lengths);
 	for (let i = 1; i < rowCount; i += 1) {
 		const jobId = String(jobIdValues[i]?.[0] || "").trim();
-		if (!jobId) {
-			continue;
-		}
 		const connectsSpent = columnValues.connectsSpent?.[i]?.[0] || "";
 		const connectsRefund = columnValues.connectsRefund?.[i]?.[0] || "";
 		const boostedConnectsSpent =
 			columnValues.boostedConnectsSpent?.[i]?.[0] || "";
 		const boostedConnectsRefund =
 			columnValues.boostedConnectsRefund?.[i]?.[0] || "";
+		rowsByIndex.set(i + 1, {
+			rowIndex: i + 1,
+			connectsSpent,
+			connectsRefund,
+			boostedConnectsSpent,
+			boostedConnectsRefund,
+		});
+		if (!jobId) {
+			continue;
+		}
 		map.set(jobId, {
 			rowIndex: i + 1,
 			connectsSpent,
@@ -726,6 +759,7 @@ const getConnectsRowMap = async (token, id, name, headers) => {
 	}
 	return {
 		map,
+		rowsByIndex,
 		nextRowIndex: rowCount ? rowCount + 1 : 2,
 		headers: resolvedHeaders,
 		columnCount: resolvedHeaders.length,

@@ -481,17 +481,36 @@ if (checkViewedButton) {
 			}
 
 			const matchedRows = [];
+			let nameMap;
+			let nameMapLoaded = false;
 			for (const item of viewed) {
 				const rowIndex = idMap.get(String(item.proposalId).trim());
 				if (rowIndex) {
 					matchedRows.push(rowIndex);
+					continue;
+				}
+				const normalized = normalizeJobName(item.title || "");
+				if (!normalized) {
+					continue;
+				}
+				if (!nameMapLoaded) {
+					nameMap = await getJobNameRowMap(
+						auth.token,
+						spreadsheetId,
+						sheetName,
+						headers
+					);
+					nameMapLoaded = true;
+				}
+				const fallbackRow = nameMap?.get(normalized);
+				if (fallbackRow) {
+					matchedRows.push(fallbackRow);
 				}
 			}
-
 			const uniqueRows = Array.from(new Set(matchedRows)).sort((a, b) => a - b);
 			if (!uniqueRows.length) {
 				setStatus(
-					`Found ${viewed.length} viewed proposal(s), but none matched the sheet's Proposal ID column.`,
+					`Found ${viewed.length} viewed proposal(s), but none matched the sheet's Proposal ID or Job Name columns.`,
 					"warn"
 				);
 				return;
@@ -535,13 +554,14 @@ if (checkViewedButton) {
 
 		const totals = new Map();
 		for (const entry of entries) {
-			if (!entry?.jobId) {
+			const jobIdValue = entry?.jobId ? String(entry.jobId).trim() : "";
+			const key = jobIdValue || normalizeJobName(entry?.title || "");
+			if (!key) {
 				continue;
 			}
-			const key = String(entry.jobId).trim();
 			if (!totals.has(key)) {
 				totals.set(key, {
-					jobId: key,
+					jobId: jobIdValue,
 					name: entry.title || "",
 					link: entry.link || "",
 					date: entry.date || "",
@@ -570,7 +590,10 @@ if (checkViewedButton) {
 		}
 
 		if (!totals.size) {
-			setStatus("No connects history entries with job IDs found.", "warn");
+			setStatus(
+				"No connects history entries with job IDs or job names found.",
+				"warn"
+			);
 			return;
 		}
 
@@ -617,6 +640,8 @@ if (checkViewedButton) {
 		const newRowUpdates = [];
 		const headers = connectsMap.headers || [];
 		const activeBidder = String(bidderInput?.value || bidder || "").trim();
+		let jobNameMap;
+		let jobNameMapLoaded = false;
 		let emptyRowInfo;
 		try {
 			emptyRowInfo = await withTimeout(
@@ -643,30 +668,46 @@ if (checkViewedButton) {
 		const newRowIndexes = [];
 		const appendedRowIndexes = [];
 		for (const entry of totals.values()) {
-			const existing = connectsMap.map.get(entry.jobId);
+			let existing = entry.jobId ? connectsMap.map.get(entry.jobId) : null;
+			if (!existing) {
+				const normalizedName = normalizeJobName(entry.name || "");
+				if (normalizedName) {
+					if (!jobNameMapLoaded) {
+						jobNameMap = await getJobNameRowMap(
+							auth.token,
+							spreadsheetId,
+							sheetName,
+							headers
+						);
+						jobNameMapLoaded = true;
+					}
+					const fallbackRowIndex = jobNameMap?.get(normalizedName);
+					if (fallbackRowIndex) {
+						existing = connectsMap.rowsByIndex.get(fallbackRowIndex) || {
+							rowIndex: fallbackRowIndex,
+							connectsSpent: "",
+							connectsRefund: "",
+							boostedConnectsSpent: "",
+							boostedConnectsRefund: "",
+						};
+					}
+				}
+			}
 			if (existing) {
-				const parsedSpent = parseConnectsCellValue(existing.connectsSpent);
-				const parsedRefund = parseConnectsCellValue(existing.connectsRefund);
-				const parsedBoostedSpent = parseConnectsCellValue(
-					existing.boostedConnectsSpent
+				const nextSpentValue = formatConnectsValue(
+					entry.connectsSpent,
+					"spent"
 				);
-				const parsedBoostedRefund = parseConnectsCellValue(
-					existing.boostedConnectsRefund
+				const nextRefundValue = formatConnectsValue(
+					entry.connectsRefund,
+					"refund"
 				);
-				const nextSpent = parsedSpent + entry.connectsSpent;
-				const nextRefund = parsedRefund + entry.connectsRefund;
-				const nextBoostedSpent =
-					parsedBoostedSpent + entry.boostedConnectsSpent;
-				const nextBoostedRefund =
-					parsedBoostedRefund + entry.boostedConnectsRefund;
-				const nextSpentValue = formatConnectsValue(nextSpent, "spent");
-				const nextRefundValue = formatConnectsValue(nextRefund, "refund");
 				const nextBoostedSpentValue = formatConnectsValue(
-					nextBoostedSpent,
+					entry.boostedConnectsSpent,
 					"spent"
 				);
 				const nextBoostedRefundValue = formatConnectsValue(
-					nextBoostedRefund,
+					entry.boostedConnectsRefund,
 					"refund"
 				);
 				if (activeBidder) {
