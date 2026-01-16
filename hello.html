@@ -46,10 +46,10 @@
 						</button>
 						<button id="read-page" class="ghost tiny" type="button">
 							<span class="icon-inline" aria-hidden="true">
-								<svg viewBox="0 0 24 24">
+								<svg viewBox="0 0 24 24" aria-hidden="true">
 									<path
-										d="M17.65 6.35A7.95 7.95 0 0012 4V1L7 6l5 5V7a5 5 0 015 5 5 5 0 01-8.66 3.54l-1.42 1.42A7 7 0 1019 12c0-1.93-.78-3.68-2.05-4.95z"
-									/>
+										d="M16.023 9.348h4.992V4.356m0 4.992-4.992-4.992m0 0A9 9 0 1 0 20.035 15.35"
+									></path>
 								</svg>
 							</span>
 							Refetch
@@ -134,9 +134,22 @@
 						<input id="sheet-name" type="text" placeholder="Sheet1" />
 					</div>
 					<div class="sheet-actions">
-						<div class="sheet-actions-row">
+						<div class="sheet-actions-row align-right">
 							<button id="prepare-sheet" class="ghost tiny" type="button">
 								Prepare sheet
+							</button>
+							<button id="open-template" class="ghost tiny" type="button">
+								Open reference sheet
+							</button>
+						</div>
+						<div class="sheet-actions-row align-right">
+							<button
+								id="populate-job-ids"
+								class="ghost tiny"
+								type="button"
+								hidden
+							>
+								Populate job IDs
 							</button>
 						</div>
 						<button id="send-sheets" class="primary" type="button" disabled>
@@ -152,6 +165,11 @@
 			<p id="status" class="status">Open an Upwork job details page to begin.</p>
 		</div>
 
+		<script src="js/popup/utils.js"></script>
+		<script src="js/popup/storage.js"></script>
+		<script src="js/popup/extraction.js"></script>
+		<script src="js/popup/tabs.js"></script>
+		<script src="js/popup/sheets.js"></script>
 		<script src="popup.js"></script>
 	</body>
 </html>
