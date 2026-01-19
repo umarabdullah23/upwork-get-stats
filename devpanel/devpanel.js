@@ -492,6 +492,177 @@ const pushCellUpdate = (updates, rangePrefix, columnIndex, rowIndex, value) => {
 	});
 };
 
+const normalizeCellValue = (value) => String(value ?? "").trim();
+
+const stripLeadingApostrophe = (value) => {
+	const text = normalizeCellValue(value);
+	return text.startsWith("'") ? text.slice(1) : text;
+};
+
+const getRowValue = (row, columnIndex) =>
+	row && columnIndex ? row[columnIndex - 1] ?? "" : "";
+
+const readSheetRow = async (token, id, name, columnCount, rowIndex) => {
+	const rows = await getSheetRows(token, id, name, columnCount, rowIndex, rowIndex);
+	return rows?.[0] || null;
+};
+
+const getSpreadsheetMeta = async (token, id, fields) => {
+	const url = new URL(
+		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(id)}`
+	);
+	if (fields) {
+		url.searchParams.set("fields", fields);
+	}
+	const response = await fetch(url.toString(), {
+		headers: { Authorization: `Bearer ${token}` },
+	});
+	if (!response.ok) {
+		return null;
+	}
+	return response.json();
+};
+
+const getSheetGridData = async (token, id, range, fields) => {
+	const url = new URL(
+		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(id)}`
+	);
+	url.searchParams.set("includeGridData", "true");
+	if (range) {
+		url.searchParams.append("ranges", range);
+	}
+	if (fields) {
+		url.searchParams.set("fields", fields);
+	}
+	const response = await fetch(url.toString(), {
+		headers: { Authorization: `Bearer ${token}` },
+	});
+	if (!response.ok) {
+		return null;
+	}
+	return response.json();
+};
+
+const normalizeColor = (color) => {
+	if (!color) {
+		return null;
+	}
+	const round = (value) =>
+		Number.isFinite(value) ? Math.round(value * 100) / 100 : null;
+	return {
+		red: round(color.red),
+		green: round(color.green),
+		blue: round(color.blue),
+	};
+};
+
+const normalizeFormat = (format) => {
+	if (!format) {
+		return null;
+	}
+	return {
+		backgroundColor: normalizeColor(format.backgroundColor),
+		horizontalAlignment: format.horizontalAlignment || null,
+		verticalAlignment: format.verticalAlignment || null,
+		wrapStrategy: format.wrapStrategy || null,
+		numberFormat: format.numberFormat
+			? {
+					type: format.numberFormat.type || null,
+					pattern: format.numberFormat.pattern || null,
+				}
+			: null,
+		textFormat: format.textFormat
+			? {
+					bold:
+						typeof format.textFormat.bold === "boolean"
+							? format.textFormat.bold
+							: null,
+					italic:
+						typeof format.textFormat.italic === "boolean"
+							? format.textFormat.italic
+							: null,
+					fontFamily: format.textFormat.fontFamily || null,
+					fontSize: format.textFormat.fontSize || null,
+					foregroundColor: normalizeColor(
+						format.textFormat.foregroundColor
+					),
+				}
+			: null,
+	};
+};
+
+const formatsMatch = (current, template) => {
+	if (!template) {
+		return true;
+	}
+	const isObject = (value) =>
+		value && typeof value === "object" && !Array.isArray(value);
+	const compare = (cur, tmpl) => {
+		if (!isObject(tmpl)) {
+			return cur === tmpl;
+		}
+		return Object.keys(tmpl).every((key) => {
+			const tmplValue = tmpl[key];
+			if (tmplValue === null || tmplValue === undefined) {
+				return true;
+			}
+			const curValue = cur ? cur[key] : null;
+			if (isObject(tmplValue)) {
+				return compare(curValue || {}, tmplValue);
+			}
+			return curValue === tmplValue;
+		});
+	};
+	return compare(current || {}, template);
+};
+
+const getGridRow = (grid, rowIndex) =>
+	grid?.rowData?.[rowIndex - 1] || null;
+
+const getGridCell = (rowData, columnIndex) =>
+	rowData?.values?.[columnIndex - 1] || null;
+
+const isGreenish = (color) => {
+	if (!color) {
+		return false;
+	}
+	const green = color.green ?? 0;
+	const red = color.red ?? 0;
+	const blue = color.blue ?? 0;
+	return green >= 0.85 && red >= 0.7 && blue >= 0.7;
+};
+
+const getHeaderLabel = (headers, columnIndex) =>
+	headers?.[columnIndex - 1] || `Column ${getColumnLetter(columnIndex)}`;
+
+const compareRowFormats = (currentRow, templateRow, columnCount, headers) => {
+	const mismatches = [];
+	for (let i = 1; i <= columnCount; i += 1) {
+		const currentFormat = normalizeFormat(
+			getGridCell(currentRow, i)?.userEnteredFormat
+		);
+		const templateFormat = normalizeFormat(
+			getGridCell(templateRow, i)?.userEnteredFormat
+		);
+		if (!formatsMatch(currentFormat, templateFormat)) {
+			mismatches.push(getHeaderLabel(headers, i));
+		}
+	}
+	return mismatches;
+};
+
+const computeUpdatedJobById = (jobs, seed, jobId) => {
+	const rng = createRng(seed);
+	let result = null;
+	for (const job of jobs) {
+		const updated = buildUpdatedJob(job, rng);
+		if (String(job?.jobId || "").trim() === jobId) {
+			result = updated;
+		}
+	}
+	return result;
+};
+
 const normalizeJobLabel = (value) =>
 	typeof normalizeJobName === "function"
 		? normalizeJobName(value)
@@ -867,6 +1038,7 @@ const bulkAddJobs = async () => {
 	return buildResult(true, "success", "Bulk add complete.", {
 		added: updates.length,
 		skipped,
+		newRowIndexes,
 	});
 };
 
@@ -1415,31 +1587,35 @@ const runFullTest = async () => {
 	}
 	try {
 		setStatus("Running full test...", "");
-		if (!getMockPayload()) {
-			generateMockData();
-		}
-		const steps = [
-			{ label: "Prepare sheet", action: prepareSheet },
-			{ label: "Bulk add jobs", action: bulkAddJobs },
-			{ label: "Bulk edit jobs", action: bulkEditJobs },
-			{ label: "Mark viewed", action: bulkMarkViewed },
-			{ label: "Update connects", action: bulkUpdateConnects },
-		];
 		const results = [];
 		let halted = false;
-		for (const step of steps) {
+		let authToken = "";
+		let headers = null;
+		let columnCount = getDefaultHeaderCount();
+		let preJobIds = new Set();
+		let preDuplicateJobIds = new Set();
+		let bulkAddResult = null;
+		let bulkViewedResult = null;
+		let bulkConnectsResult = null;
+		let sampleJob = null;
+		let sampleRowIndex = null;
+		let sampleRowBefore = null;
+		let viewedMatchedRows = [];
+
+		const runStep = async (label, action, options = {}) => {
+			const { critical = true } = options;
 			if (halted) {
-				results.push(
-					buildResult(false, "warn", "Skipped after failure.", {
-						label: step.label,
+				results.push({
+					label,
+					...buildResult(false, "warn", "Skipped after failure.", {
 						skipped: true,
-					})
-				);
-				continue;
+					}),
+				});
+				return null;
 			}
 			let result;
 			try {
-				result = await step.action();
+				result = await action();
 			} catch (error) {
 				result = buildResult(
 					false,
@@ -1448,11 +1624,1009 @@ const runFullTest = async () => {
 				);
 			}
 			const normalized = result || buildResult(false, "error", "No result.");
-			results.push({ ...normalized, label: step.label });
-			if (!normalized.ok && normalized.tone === "error") {
+			results.push({ ...normalized, label });
+			if (critical && !normalized.ok && normalized.tone === "error") {
 				halted = true;
 			}
-		}
+			return normalized;
+		};
+
+		const validateHeaders = (currentHeaders, strictTemplate) => {
+			if (!Array.isArray(currentHeaders) || !currentHeaders.length) {
+				return buildResult(false, "error", "No headers returned.");
+			}
+			const required = [
+				"Job Name",
+				"Job ID",
+				"Proposal ID",
+				"Read",
+				"Invites",
+				"Interview",
+				"Proposals",
+				"Connects Spent",
+				"Connects Refund",
+			];
+			const missing = required.filter(
+				(name) => !getHeaderIndex(currentHeaders, name)
+			);
+			if (missing.length) {
+				return buildResult(
+					false,
+					"error",
+					`Missing headers: ${missing.join(", ")}.`
+				);
+			}
+			const boostedRequired = getConnectsBoostedRate() > 0;
+			const boostedMissing = boostedRequired
+				? [
+						!getHeaderIndex(currentHeaders, "Boosted Connects Spent")
+							? "Boosted Connects Spent"
+							: null,
+						!getHeaderIndex(currentHeaders, "Boosted Connects Refund")
+							? "Boosted Connects Refund"
+							: null,
+					].filter(Boolean)
+				: [];
+			if (boostedMissing.length) {
+				return buildResult(
+					false,
+					"error",
+					`Missing boosted columns: ${boostedMissing.join(", ")}.`
+				);
+			}
+			const warnings = [];
+			if (currentHeaders.length < getDefaultHeaderCount()) {
+				warnings.push("Header count is shorter than the template.");
+			}
+			if (typeof DEFAULT_HEADERS !== "undefined") {
+				const matchesTemplate = DEFAULT_HEADERS.every(
+					(header, index) => currentHeaders[index] === header
+				);
+				if (!matchesTemplate) {
+					if (strictTemplate) {
+						return buildResult(
+							false,
+							"error",
+							"Header row does not match the template."
+						);
+					}
+					warnings.push("Header row does not match the template.");
+				}
+			}
+			const counts = new Map();
+			currentHeaders.forEach((header) => {
+				const key = String(header || "").trim();
+				if (!key) {
+					return;
+				}
+				counts.set(key, (counts.get(key) || 0) + 1);
+			});
+			const duplicates = Array.from(counts.entries())
+				.filter((entry) => entry[1] > 1)
+				.map((entry) => entry[0]);
+			if (duplicates.length) {
+				warnings.push(`Duplicate headers: ${duplicates.join(", ")}.`);
+			}
+			if (warnings.length) {
+				return buildResult(true, "warn", warnings.join(" "));
+			}
+			return buildResult(true, "success", "Headers look good.");
+		};
+
+		await runStep("Validate sheet settings", () => {
+			updateSheetStateFromInputs();
+			if (!sheetId || !sheetName) {
+				return buildResult(false, "error", "Sheet ID or tab is missing.");
+			}
+			return buildResult(true, "success", "Sheet settings ready.");
+		});
+
+		await runStep(
+			"Ensure mock data",
+			() => {
+				if (!getMockPayload()) {
+					generateMockData();
+				}
+				return buildResult(true, "success", "Mock data ready.");
+			},
+			{ critical: false }
+		);
+
+		await runStep("Authorize Google", async () => {
+			const auth = await requestAuthToken(true);
+			if (!auth.ok) {
+				return buildResult(
+					false,
+					"error",
+					auth.error || "Google authorization failed."
+				);
+			}
+			authToken = auth.token;
+			return buildResult(true, "success", "Authorized.");
+		});
+
+		await runStep("Validate sheet tab", async () => {
+			if (!authToken) {
+				return buildResult(false, "error", "Missing auth token.");
+			}
+			const tabId = await getSheetId(authToken, sheetId, sheetName);
+			if (tabId === null) {
+				return buildResult(false, "error", "Sheet tab not found.");
+			}
+			return buildResult(true, "success", "Sheet tab found.");
+		});
+
+		await runStep("Read headers", async () => {
+			if (!authToken) {
+				return buildResult(false, "error", "Missing auth token.");
+			}
+			headers = await getSheetHeaders(authToken, sheetId, sheetName);
+			if (!headers) {
+				return buildResult(false, "error", "Unable to read headers.");
+			}
+			columnCount = headers.length || getDefaultHeaderCount();
+			return validateHeaders(headers, false);
+		});
+
+		await runStep(
+			"Check Job Status dropdown",
+			async () => {
+				if (!authToken || !headers) {
+					return buildResult(false, "error", "Missing sheet context.");
+				}
+				const jobStatusIndex = getHeaderIndex(headers, "Job Status");
+				if (!jobStatusIndex) {
+					return buildResult(true, "warn", "Job Status header missing.");
+				}
+				const cell = `${getColumnLetter(jobStatusIndex)}2`;
+				const validation = await getCellDataValidation(
+					authToken,
+					sheetId,
+					sheetName,
+					cell
+				);
+				if (!validation) {
+					return buildResult(
+						true,
+						"warn",
+						"Job Status dropdown is missing."
+					);
+				}
+				return buildResult(true, "success", "Job Status dropdown found.");
+			},
+			{ critical: false }
+		);
+
+		await runStep(
+			"Check bidder dropdown",
+			async () => {
+				if (!authToken || !headers) {
+					return buildResult(false, "error", "Missing sheet context.");
+				}
+				const bidderIndex = getHeaderIndex(headers, "Bidder");
+				if (!bidderIndex) {
+					return buildResult(true, "warn", "Bidder header missing.");
+				}
+				const cell = `${getColumnLetter(bidderIndex)}2`;
+				const validation = await getCellDataValidation(
+					authToken,
+					sheetId,
+					sheetName,
+					cell
+				);
+				if (!validation) {
+					return buildResult(
+						true,
+						"warn",
+						"Bidder dropdown is missing."
+					);
+				}
+				return buildResult(true, "success", "Bidder dropdown found.");
+			},
+			{ critical: false }
+		);
+
+		await runStep(
+			"Check empty rows",
+			async () => {
+				if (!authToken || !headers) {
+					return buildResult(false, "error", "Missing sheet context.");
+				}
+				const emptyInfo = await getEmptyRowIndexes(
+					authToken,
+					sheetId,
+					sheetName,
+					headers
+				);
+				if (!emptyInfo) {
+					return buildResult(true, "warn", "Unable to scan empty rows.");
+				}
+				if (!emptyInfo.emptyRows.length) {
+					return buildResult(
+						true,
+						"warn",
+						"No empty rows found; bulk add will append."
+					);
+				}
+				return buildResult(
+					true,
+					"success",
+					`Empty rows: ${emptyInfo.emptyRows.length}.`
+				);
+			},
+			{ critical: false }
+		);
+
+		await runStep("Prepare sheet", prepareSheet);
+
+		await runStep("Re-check headers after prepare", async () => {
+			if (!authToken) {
+				return buildResult(false, "error", "Missing auth token.");
+			}
+			headers = await getSheetHeaders(authToken, sheetId, sheetName);
+			if (!headers) {
+				return buildResult(false, "error", "Unable to read headers.");
+			}
+			columnCount = headers.length || getDefaultHeaderCount();
+			return validateHeaders(headers, true);
+		});
+
+		await runStep("Snapshot Job IDs", async () => {
+			if (!authToken || !headers) {
+				return buildResult(false, "error", "Missing sheet context.");
+			}
+			const jobIdIndex = getHeaderIndex(headers, "Job ID");
+			if (!jobIdIndex) {
+				return buildResult(false, "error", "Job ID header missing.");
+			}
+			const rows = await getColumnValues(
+				authToken,
+				sheetId,
+				sheetName,
+				jobIdIndex - 1,
+				2
+			);
+			if (!rows) {
+				return buildResult(false, "error", "Unable to read Job ID column.");
+			}
+			const counts = new Map();
+			rows.forEach((row) => {
+				const value = normalizeCellValue(row?.[0]);
+				if (!value) {
+					return;
+				}
+				counts.set(value, (counts.get(value) || 0) + 1);
+			});
+			preJobIds = new Set(counts.keys());
+			preDuplicateJobIds = new Set(
+				Array.from(counts.entries())
+					.filter((entry) => entry[1] > 1)
+					.map((entry) => entry[0])
+			);
+			if (preDuplicateJobIds.size) {
+				return buildResult(
+					true,
+					"warn",
+					"Duplicate Job IDs already exist in sheet."
+				);
+			}
+			return buildResult(true, "success", "Captured Job ID snapshot.");
+		});
+
+		bulkAddResult = await runStep("Bulk add jobs", bulkAddJobs);
+
+		await runStep("Verify bulk add results", async () => {
+			if (!authToken || !headers) {
+				return buildResult(false, "error", "Missing sheet context.");
+			}
+			const payload = getMockPayload();
+			const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
+			if (!jobs.length) {
+				return buildResult(false, "error", "Mock data missing.");
+			}
+			const jobIdIndex = getHeaderIndex(headers, "Job ID");
+			const rows = await getColumnValues(
+				authToken,
+				sheetId,
+				sheetName,
+				jobIdIndex - 1,
+				2
+			);
+			if (!rows) {
+				return buildResult(false, "error", "Unable to read Job IDs.");
+			}
+			const counts = new Map();
+			rows.forEach((row) => {
+				const value = normalizeCellValue(row?.[0]);
+				if (!value) {
+					return;
+				}
+				counts.set(value, (counts.get(value) || 0) + 1);
+			});
+			const afterJobIds = new Set(counts.keys());
+			const afterDuplicateJobIds = new Set(
+				Array.from(counts.entries())
+					.filter((entry) => entry[1] > 1)
+					.map((entry) => entry[0])
+			);
+			const newDuplicates = Array.from(afterDuplicateJobIds).filter(
+				(id) => !preDuplicateJobIds.has(id)
+			);
+			if (newDuplicates.length) {
+				return buildResult(
+					false,
+					"error",
+					`New duplicate Job IDs detected: ${newDuplicates.join(", ")}.`
+				);
+			}
+			const missingFromSheet = jobs
+				.map((job) => normalizeCellValue(job?.jobId))
+				.filter((jobId) => jobId && !afterJobIds.has(jobId));
+			if (missingFromSheet.length) {
+				return buildResult(
+					false,
+					"error",
+					`Missing Job IDs after add: ${missingFromSheet.slice(0, 5).join(", ")}.`
+				);
+			}
+			const missingExisting = Array.from(preJobIds).filter(
+				(jobId) => !afterJobIds.has(jobId)
+			);
+			if (missingExisting.length) {
+				return buildResult(
+					false,
+					"error",
+					`Existing Job IDs disappeared: ${missingExisting.slice(0, 5).join(", ")}.`
+				);
+			}
+			const payloadUnique = new Set(
+				jobs.map((job) => normalizeCellValue(job?.jobId)).filter(Boolean)
+			);
+			const expectedAdded = Array.from(payloadUnique).filter(
+				(jobId) => !preJobIds.has(jobId)
+			).length;
+			if (
+				typeof bulkAddResult?.added === "number" &&
+				bulkAddResult.added !== expectedAdded
+			) {
+				return buildResult(
+					true,
+					"warn",
+					`Expected ${expectedAdded} new rows, got ${bulkAddResult.added}.`
+				);
+			}
+			return buildResult(true, "success", "Bulk add verified.");
+		});
+
+		await runStep(
+			"Capture sample row",
+			async () => {
+				if (!authToken || !headers) {
+					return buildResult(false, "error", "Missing sheet context.");
+				}
+				const payload = getMockPayload();
+				const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
+				if (!jobs.length) {
+					return buildResult(false, "error", "Mock data missing.");
+				}
+				const jobMap = await getJobIdRowMap(
+					authToken,
+					sheetId,
+					sheetName,
+					headers
+				);
+				if (!jobMap) {
+					return buildResult(false, "error", "Job ID map unavailable.");
+				}
+				for (const job of jobs) {
+					const jobIdValue = normalizeCellValue(job?.jobId);
+					const rowIndex = jobIdValue
+						? jobMap.map.get(jobIdValue)
+						: null;
+					if (rowIndex) {
+						sampleJob = job;
+						sampleRowIndex = rowIndex;
+						break;
+					}
+				}
+				if (!sampleJob || !sampleRowIndex) {
+					return buildResult(
+						true,
+						"warn",
+						"No matching job found for sample checks."
+					);
+				}
+				sampleRowBefore = await readSheetRow(
+					authToken,
+					sheetId,
+					sheetName,
+					columnCount,
+					sampleRowIndex
+				);
+				if (!sampleRowBefore) {
+					return buildResult(
+						true,
+						"warn",
+						"Unable to capture sample row."
+					);
+				}
+				return buildResult(true, "success", "Sample row captured.");
+			},
+			{ critical: false }
+		);
+
+		await runStep("Bulk edit jobs", bulkEditJobs);
+
+		await runStep(
+			"Verify bulk edit results",
+			async () => {
+				if (
+					!authToken ||
+					!headers ||
+					!sampleJob ||
+					!sampleRowIndex ||
+					!sampleRowBefore
+				) {
+					return buildResult(
+						true,
+						"warn",
+						"Sample row unavailable for edit validation."
+					);
+				}
+				const sampleRowAfter = await readSheetRow(
+					authToken,
+					sheetId,
+					sheetName,
+					columnCount,
+					sampleRowIndex
+				);
+				if (!sampleRowAfter) {
+					return buildResult(
+						false,
+						"error",
+						"Unable to read sample row after edit."
+					);
+				}
+				const allowedHeaders = new Set([
+					"Date",
+					"Bidder",
+					"Invites",
+					"Interview",
+					"Payment",
+					"Country",
+					"Job Created Since",
+					"Proposals",
+				]);
+				const unexpectedChanges = [];
+				headers.forEach((header, index) => {
+					const name = String(header || "").trim();
+					if (!name || allowedHeaders.has(name)) {
+						return;
+					}
+					const before = normalizeCellValue(sampleRowBefore[index]);
+					const after = normalizeCellValue(sampleRowAfter[index]);
+					if (before !== after) {
+						unexpectedChanges.push(name);
+					}
+				});
+				if (unexpectedChanges.length) {
+					return buildResult(
+						false,
+						"error",
+						`Unexpected changes in: ${unexpectedChanges.join(", ")}.`
+					);
+				}
+				const payload = getMockPayload();
+				const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
+				const expected = computeUpdatedJobById(
+					jobs,
+					`${seedInput.value}-bulk-edit`,
+					normalizeCellValue(sampleJob?.jobId)
+				);
+				if (!expected) {
+					return buildResult(true, "warn", "Expected data not found.");
+				}
+				const checks = [
+					{ header: "Invites", value: expected.invitesSent },
+					{ header: "Interview", value: expected.interviewing },
+					{ header: "Proposals", value: expected.proposals },
+					{ header: "Payment", value: expected.payment },
+					{ header: "Country", value: expected.country },
+					{ header: "Job Created Since", value: expected.jobCreatedSince },
+				];
+				const bidderValue = getBidderValue();
+				if (bidderValue) {
+					checks.push({ header: "Bidder", value: bidderValue });
+				}
+				const dateIndex = getHeaderIndex(headers, "Date");
+				if (dateIndex) {
+					checks.push({
+						header: "Date",
+						value: stripLeadingApostrophe(expected.date),
+						strip: true,
+					});
+				}
+				const mismatches = [];
+				checks.forEach((check) => {
+					const index = getHeaderIndex(headers, check.header);
+					if (!index) {
+						return;
+					}
+					const actual = check.strip
+						? stripLeadingApostrophe(getRowValue(sampleRowAfter, index))
+						: normalizeCellValue(getRowValue(sampleRowAfter, index));
+					const expectedValue = check.strip
+						? stripLeadingApostrophe(check.value)
+						: normalizeCellValue(check.value);
+					if (actual !== expectedValue) {
+						mismatches.push(check.header);
+					}
+				});
+				if (mismatches.length) {
+					return buildResult(
+						false,
+						"error",
+						`Edited values mismatch: ${mismatches.join(", ")}.`
+					);
+				}
+				return buildResult(true, "success", "Bulk edit verified.");
+			},
+			{ critical: false }
+		);
+
+		await runStep(
+			"Bulk add idempotency",
+			async () => {
+				const result = await bulkAddJobs();
+				if (!result || typeof result.added !== "number") {
+					return buildResult(true, "warn", "Idempotency result unavailable.");
+				}
+				if (result.added !== 0) {
+					return buildResult(
+						false,
+						"error",
+						"Bulk add added rows on second pass."
+					);
+				}
+				return buildResult(true, "success", "Bulk add is idempotent.");
+			},
+			{ critical: false }
+		);
+
+		bulkViewedResult = await runStep("Mark viewed", bulkMarkViewed);
+
+		await runStep(
+			"Verify viewed selection",
+			async () => {
+				if (!authToken || !headers) {
+					return buildResult(false, "error", "Missing sheet context.");
+				}
+				const payload = getMockPayload();
+				const proposals = Array.isArray(payload?.proposals)
+					? payload.proposals
+					: [];
+				if (!proposals.length) {
+					return buildResult(false, "error", "Mock proposals missing.");
+				}
+				const viewedRate = getViewedRate() / 100;
+				const rng = createRng(`${seedInput.value}-viewed`);
+				const candidates = proposals.filter(() => rng() < viewedRate);
+				const idMap = await getProposalIdRowMap(
+					authToken,
+					sheetId,
+					sheetName,
+					headers
+				);
+				const nameMap = await getJobNameRowMap(
+					authToken,
+					sheetId,
+					sheetName,
+					headers
+				);
+				const matchedRows = [];
+				candidates.forEach((item) => {
+					const proposalId = normalizeCellValue(item?.proposalId);
+					let rowIndex = proposalId ? idMap?.get(proposalId) : null;
+					if (!rowIndex) {
+						const normalized = normalizeJobLabel(item?.title || "");
+						rowIndex = normalized ? nameMap?.get(normalized) : null;
+					}
+					if (rowIndex) {
+						matchedRows.push(rowIndex);
+					}
+				});
+				viewedMatchedRows = Array.from(new Set(matchedRows)).sort((a, b) => a - b);
+				const expectedMatched = viewedMatchedRows.length;
+				if (!bulkViewedResult) {
+					return buildResult(true, "warn", "Viewed result unavailable.");
+				}
+				if (
+					typeof bulkViewedResult.candidates === "number" &&
+					bulkViewedResult.candidates !== candidates.length
+				) {
+					return buildResult(
+						true,
+						"warn",
+						"Viewed candidate counts differ."
+					);
+				}
+				if (
+					typeof bulkViewedResult.matched === "number" &&
+					bulkViewedResult.matched !== expectedMatched
+				) {
+					return buildResult(
+						false,
+						"error",
+						"Viewed matched rows differ from expectation."
+					);
+				}
+				return buildResult(true, "success", "Viewed selection verified.");
+			},
+			{ critical: false }
+		);
+
+		bulkConnectsResult = await runStep("Update connects", bulkUpdateConnects);
+
+		await runStep(
+			"Verify connects values",
+			async () => {
+				if (!authToken || !headers) {
+					return buildResult(false, "error", "Missing sheet context.");
+				}
+				const payload = getMockPayload();
+				const entries = Array.isArray(payload?.connects) ? payload.connects : [];
+				if (!entries.length) {
+					return buildResult(false, "error", "Mock connects missing.");
+				}
+				const totals = new Map();
+				entries.forEach((entry) => {
+					const jobIdValue = normalizeCellValue(entry?.jobId);
+					const key = jobIdValue || normalizeJobLabel(entry?.title || "");
+					if (!key) {
+						return;
+					}
+					if (!totals.has(key)) {
+						totals.set(key, {
+							jobId: jobIdValue,
+							name: entry.title || "",
+							connectsSpent: 0,
+							connectsRefund: 0,
+							boostedConnectsSpent: 0,
+							boostedConnectsRefund: 0,
+						});
+					}
+					const target = totals.get(key);
+					target.connectsSpent += Number(entry.connectsSpent || 0);
+					target.connectsRefund += Number(entry.connectsRefund || 0);
+					target.boostedConnectsSpent += Number(entry.boostedConnectsSpent || 0);
+					target.boostedConnectsRefund += Number(entry.boostedConnectsRefund || 0);
+				});
+				if (!totals.size) {
+					return buildResult(true, "warn", "No connects totals found.");
+				}
+				const connectsMap = await getConnectsRowMap(
+					authToken,
+					sheetId,
+					sheetName,
+					headers
+				);
+				if (!connectsMap) {
+					return buildResult(false, "error", "Connects map unavailable.");
+				}
+				let sampleEntry = null;
+				let rowIndex = null;
+				for (const entry of totals.values()) {
+					if (entry.jobId && connectsMap.map.has(entry.jobId)) {
+						sampleEntry = entry;
+						rowIndex = connectsMap.map.get(entry.jobId).rowIndex;
+						break;
+					}
+				}
+				if (!sampleEntry) {
+					for (const entry of totals.values()) {
+						const normalized = normalizeJobLabel(entry.name || "");
+						if (!normalized) {
+							continue;
+						}
+						const nameMap = await getJobNameRowMap(
+							authToken,
+							sheetId,
+							sheetName,
+							headers
+						);
+						rowIndex = nameMap?.get(normalized) || null;
+						if (rowIndex) {
+							sampleEntry = entry;
+							break;
+						}
+					}
+				}
+				if (!sampleEntry || !rowIndex) {
+					return buildResult(
+						true,
+						"warn",
+						"No connects row found for validation."
+					);
+				}
+				const row = await readSheetRow(
+					authToken,
+					sheetId,
+					sheetName,
+					columnCount,
+					rowIndex
+				);
+				if (!row) {
+					return buildResult(false, "error", "Unable to read connects row.");
+				}
+				const checks = [
+					{
+						header: "Connects Spent",
+						value: formatConnectsValue(sampleEntry.connectsSpent, "spent"),
+					},
+					{
+						header: "Connects Refund",
+						value: formatConnectsValue(sampleEntry.connectsRefund, "refund"),
+					},
+					{
+						header: "Boosted Connects Spent",
+						value: formatConnectsValue(
+							sampleEntry.boostedConnectsSpent,
+							"spent"
+						),
+					},
+					{
+						header: "Boosted Connects Refund",
+						value: formatConnectsValue(
+							sampleEntry.boostedConnectsRefund,
+							"refund"
+						),
+					},
+				];
+				const mismatches = [];
+				checks.forEach((check) => {
+					const index = getHeaderIndex(headers, check.header);
+					if (!index) {
+						if (check.value) {
+							mismatches.push(check.header);
+						}
+						return;
+					}
+					const actual = normalizeCellValue(getRowValue(row, index));
+					const expectedValue = normalizeCellValue(check.value);
+					if (actual !== expectedValue) {
+						mismatches.push(check.header);
+					}
+				});
+				if (mismatches.length) {
+					return buildResult(
+						false,
+						"error",
+						`Connects values mismatch: ${mismatches.join(", ")}.`
+					);
+				}
+				if (bulkConnectsResult?.ok === false) {
+					return buildResult(
+						false,
+						"error",
+						"Connects update reported failure."
+					);
+				}
+				return buildResult(true, "success", "Connects values verified.");
+			},
+			{ critical: false }
+		);
+
+		await runStep(
+			"Fetch full sheet data and styles",
+			async () => {
+				if (!authToken || !headers) {
+					return buildResult(false, "error", "Missing sheet context.");
+				}
+				const endColumn = getColumnLetter(columnCount);
+				const values = await getSheetRows(
+					authToken,
+					sheetId,
+					sheetName,
+					columnCount,
+					1
+				);
+				if (!values) {
+					return buildResult(false, "error", "Unable to read sheet values.");
+				}
+				const lastRow = Math.max(values.length, 1);
+				const normalizedName =
+					typeof normalizeSheetName === "function"
+						? normalizeSheetName(sheetName)
+						: sheetName;
+				const escaped = String(normalizedName || "").replace(/'/g, "''");
+				const range = `'${escaped}'!A1:${endColumn}${lastRow}`;
+				const fields =
+					"sheets(data.rowData.values(userEnteredValue,userEnteredFormat),properties)";
+				const gridResponse = await getSheetGridData(
+					authToken,
+					sheetId,
+					range,
+					fields
+				);
+				if (!gridResponse) {
+					return buildResult(false, "error", "Unable to read sheet grid data.");
+				}
+				const gridData = gridResponse?.sheets?.[0]?.data?.[0];
+				if (!gridData) {
+					return buildResult(
+						false,
+						"error",
+						"Sheet grid data missing from response."
+					);
+				}
+				let nonEmptyCells = 0;
+				let rowsWithValues = 0;
+				values.forEach((row) => {
+					const rowHasValue = row?.some((cell) => normalizeCellValue(cell));
+					if (rowHasValue) {
+						rowsWithValues += 1;
+					}
+					row?.forEach((cell) => {
+						if (normalizeCellValue(cell)) {
+							nonEmptyCells += 1;
+						}
+					});
+				});
+				const headerRow = values[0] || [];
+				const headerMismatches = headers
+					.map((header, index) => ({
+						header,
+						value: normalizeCellValue(headerRow[index]),
+					}))
+					.filter(
+						(item) =>
+							normalizeCellValue(item.header) !== normalizeCellValue(item.value)
+					)
+					.map((item) => item.header);
+
+				const headerRowData = getGridRow(gridData, 1);
+				const headerStyleMissing = [];
+				for (let i = 1; i <= columnCount; i += 1) {
+					const cell = getGridCell(headerRowData, i);
+					const format = cell?.userEnteredFormat;
+					const bold = format?.textFormat?.bold;
+					if (!bold) {
+						headerStyleMissing.push(getHeaderLabel(headers, i));
+					}
+				}
+
+				let templateHeaderMismatch = [];
+				let templateRowMismatch = [];
+				let templateWarning = "";
+				const templateMeta = await getSpreadsheetMeta(
+					authToken,
+					TEMPLATE_SPREADSHEET_ID,
+					"sheets.properties"
+				);
+				const templateTitle =
+					templateMeta?.sheets?.[0]?.properties?.title || null;
+				if (templateTitle) {
+					const templateRange = `'${templateTitle.replace(/'/g, "''")}'!A1:${endColumn}2`;
+					const templateGridResponse = await getSheetGridData(
+						authToken,
+						TEMPLATE_SPREADSHEET_ID,
+						templateRange,
+						fields
+					);
+					const templateGrid = templateGridResponse?.sheets?.[0]?.data?.[0];
+					if (templateGrid) {
+						const templateHeaderRow = getGridRow(templateGrid, 1);
+						const templateRow = getGridRow(templateGrid, 2);
+						templateHeaderMismatch = compareRowFormats(
+							headerRowData,
+							templateHeaderRow,
+							columnCount,
+							headers
+						);
+						const rowsToCheck =
+							bulkAddResult?.newRowIndexes?.length
+								? bulkAddResult.newRowIndexes
+								: lastRow >= 2
+									? [2]
+									: [];
+						rowsToCheck.forEach((rowIndex) => {
+							const currentRow = getGridRow(gridData, rowIndex);
+							if (!currentRow || !templateRow) {
+								return;
+							}
+							const mismatches = compareRowFormats(
+								currentRow,
+								templateRow,
+								columnCount,
+								headers
+							);
+							if (mismatches.length) {
+								templateRowMismatch.push(
+									`Row ${rowIndex}: ${mismatches.join(", ")}`
+								);
+							}
+						});
+					} else {
+						templateWarning = "Template grid data unavailable.";
+					}
+				} else {
+					templateWarning = "Template sheet metadata unavailable.";
+				}
+
+				const readColumnIndex = getHeaderIndex(headers, "Read");
+				let viewedStyleMismatch = [];
+				if (readColumnIndex && viewedMatchedRows.length) {
+					viewedMatchedRows.forEach((rowIndex) => {
+						const rowData = getGridRow(gridData, rowIndex);
+						const cell = getGridCell(rowData, readColumnIndex);
+						const color = normalizeColor(
+							cell?.userEnteredFormat?.backgroundColor
+						);
+						if (!isGreenish(color)) {
+							viewedStyleMismatch.push(String(rowIndex));
+						}
+					});
+				}
+
+				const warnings = [];
+				const errors = [];
+				if (headerMismatches.length) {
+					errors.push(
+						`Header values mismatch: ${headerMismatches.join(", ")}.`
+					);
+				}
+				if (headerStyleMissing.length) {
+					errors.push(
+						`Header bold missing: ${headerStyleMissing.slice(0, 6).join(", ")}.`
+					);
+				}
+				if (templateHeaderMismatch.length) {
+					errors.push(
+						`Template header format mismatch: ${templateHeaderMismatch
+							.slice(0, 6)
+							.join(", ")}.`
+					);
+				}
+				if (templateRowMismatch.length) {
+					errors.push(
+						`Template row format mismatch: ${templateRowMismatch
+							.slice(0, 3)
+							.join(" | ")}.`
+					);
+				}
+				if (viewedStyleMismatch.length) {
+					errors.push(
+						`Viewed highlight mismatch at rows: ${viewedStyleMismatch
+							.slice(0, 8)
+							.join(", ")}.`
+					);
+				}
+				if (templateWarning) {
+					warnings.push(templateWarning);
+				}
+				if (!errors.length && !warnings.length) {
+					return buildResult(
+						true,
+						"success",
+						`Sheet snapshot OK. Rows: ${rowsWithValues}, cells: ${nonEmptyCells}.`
+					);
+				}
+				if (!errors.length) {
+					return buildResult(
+						true,
+						"warn",
+						`${warnings.join(" ")} Rows: ${rowsWithValues}, cells: ${nonEmptyCells}.`
+					);
+				}
+				return buildResult(
+					false,
+					"error",
+					`${errors.concat(warnings).join(" ")} Rows: ${rowsWithValues}, cells: ${nonEmptyCells}.`
+				);
+			},
+			{ critical: false }
+		);
+
 		const lines = results.map((result) =>
 			formatTestLine(result.label, result)
 		);
