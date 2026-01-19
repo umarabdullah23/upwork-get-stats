@@ -15,8 +15,9 @@ const openTemplateButton = document.getElementById("open-template");
 const sendSheetsButton = document.getElementById("send-sheets");
 const statusEl = document.getElementById("status");
 const bidderInput = document.getElementById("bidder-input");
+const openDevPanelButton = document.getElementById("open-dev-panel");
 
-const PREPARE_SHEET_CONFIRMATION = "umar";
+const TESTING_PASSWORD = "umar";
 
 const fields = {
 	name: document.getElementById("field-name"),
@@ -116,12 +117,12 @@ const validationAllowsValue = (dataValidation, value) => {
 	return options.includes(trimmed);
 };
 
-const verifyPrepareSheetPassword = () => {
-	const entered = window.prompt("Enter password to prepare the sheet:");
+const verifyTestingPassword = (actionLabel) => {
+	const entered = window.prompt(`Enter password to ${actionLabel}:`);
 	if (entered === null) {
 		return false;
 	}
-	return entered === PREPARE_SHEET_CONFIRMATION;
+	return entered === TESTING_PASSWORD;
 };
 
 const parseConnectsCellValue = (value) => {
@@ -918,6 +919,23 @@ if (openTemplateButton) {
 	});
 }
 
+if (openDevPanelButton) {
+	openDevPanelButton.addEventListener("click", () => {
+		if (!verifyTestingPassword("open the dev panel")) {
+			setStatus("Dev panel access canceled or password incorrect.", "warn");
+			return;
+		}
+		const url = chrome?.runtime?.getURL
+			? chrome.runtime.getURL("devpanel/devpanel.html")
+			: "devpanel/devpanel.html";
+		if (chrome?.tabs?.create) {
+			chrome.tabs.create({ url });
+		} else {
+			window.open(url, "_blank", "noopener");
+		}
+	});
+}
+
 if (populateJobIdsButton) {
 	populateJobIdsButton.addEventListener("click", async () => {
 		if (!spreadsheetId) {
@@ -1042,7 +1060,7 @@ prepareSheetButton.addEventListener("click", async () => {
 		setStatus("Save your Sheets settings first.", "warn");
 		return;
 	}
-	if (!verifyPrepareSheetPassword()) {
+	if (!verifyTestingPassword("prepare the sheet")) {
 		setStatus("Sheet preparation canceled or password incorrect.", "warn");
 		return;
 	}

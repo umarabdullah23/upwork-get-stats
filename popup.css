@@ -61,6 +61,13 @@ body {
 	display: none;
 }
 
+.testing-actions {
+	display: flex;
+	gap: 8px;
+	justify-content: flex-end;
+	flex-wrap: wrap;
+}
+
 .bidder-options {
 	display: flex;
 	gap: 8px;
@@ -367,6 +374,16 @@ button:disabled {
 button.tiny {
 	padding: 6px 10px;
 	font-size: 11px;
+}
+
+.ghost.subtle {
+	opacity: 0.6;
+	border-color: rgba(15, 23, 42, 0.12);
+	box-shadow: none;
+}
+
+.ghost.subtle:hover {
+	opacity: 0.85;
 }
 
 .sheet-actions-row .ghost {

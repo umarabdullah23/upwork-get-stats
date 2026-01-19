@@ -14,6 +14,17 @@ const formatSheetDate = (value) => {
 	return `'${text}`;
 };
 
+const formatSheetId = (value) => {
+	const text = String(value ?? "").trim();
+	if (!text || text === "--") {
+		return text;
+	}
+	if (!/^\d+$/.test(text)) {
+		return text;
+	}
+	return `'${text}`;
+};
+
 const toCsvRow = (data) =>
 	[
 		data.date,
@@ -74,9 +85,9 @@ const buildSheetRow = (data) => {
 		data.country || "",
 		data.jobCreatedSince || "",
 		data.jobStatusAlt || "",
-		data.jobId || "",
+		formatSheetId(data.jobId),
 		data.proposals || "",
-		data.proposalId || "--",
+		formatSheetId(data.proposalId || "--"),
 		data.connectsSpent || "",
 		data.connectsRefund || "",
 		data.boostedConnectsSpent || "",
@@ -112,9 +123,9 @@ const buildConnectsRow = (data) => {
 		"",
 		"",
 		"",
-		data.jobId || "",
+		formatSheetId(data.jobId),
 		data.proposals || "",
-		data.proposalId || "--",
+		formatSheetId(data.proposalId || "--"),
 		data.connectsSpent || "",
 		data.connectsRefund || "",
 		data.boostedConnectsSpent || "",
@@ -492,11 +503,11 @@ const buildRowFromHeaders = (headers, data) => {
 			case "Job Created Since":
 				return data.jobCreatedSince || "";
 			case "Job ID":
-				return data.jobId || "";
+				return formatSheetId(data.jobId);
 			case "Proposals":
 				return data.proposals || "";
 			case "Proposal ID":
-				return data.proposalId || "--";
+				return formatSheetId(data.proposalId || "--");
 			case "Connects Spent":
 				return data.connectsSpent || "";
 			case "Connects Refund":

@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Upwork Activity Dev Panel</title>
+		<link rel="stylesheet" href="../popup.css" />
+		<link rel="stylesheet" href="devpanel.css" />
+	</head>
+	<body class="devpanel">
+		<div class="shell">
+			<header class="hero">
+				<p class="kicker">Dev panel</p>
+				<h1>Fixture and mock data lab</h1>
+				<p class="sub">
+					Parse saved HTML fixtures, generate sample data, and copy JSON for
+					tests.
+				</p>
+			</header>
+
+			<section class="card">
+				<h2>Fixtures</h2>
+				<p class="hint">
+					Load the saved Upwork pages and run the extraction helpers.
+				</p>
+				<div class="fixture-actions">
+					<button class="ghost tiny" type="button" data-fixture="job">
+						Parse job page
+					</button>
+					<button class="ghost tiny" type="button" data-fixture="proposals">
+						Parse proposals page
+					</button>
+					<button class="ghost tiny" type="button" data-fixture="connects">
+						Parse connects history
+					</button>
+				</div>
+				<div id="fixture-output" class="output-panel">
+					Select a fixture to see parsed output.
+				</div>
+			</section>
+
+			<section class="card">
+				<h2>Mock scraped data</h2>
+				<p class="hint">
+					Generate larger data sets for UI and sheet previews.
+				</p>
+				<div class="form-grid">
+					<label for="mock-seed">Seed</label>
+					<input id="mock-seed" type="text" value="barq-dev" />
+					<label for="mock-jobs">Jobs</label>
+					<input id="mock-jobs" type="number" min="1" value="25" />
+					<label for="mock-proposals">Proposals</label>
+					<input id="mock-proposals" type="number" min="1" value="120" />
+					<label for="mock-connects">Connects</label>
+					<input id="mock-connects" type="number" min="1" value="80" />
+				</div>
+				<div class="button-row">
+					<button id="generate-mock" class="primary" type="button">
+						Generate mock data
+					</button>
+					<button id="copy-mock" class="ghost" type="button">
+						Copy JSON
+					</button>
+				</div>
+				<textarea id="mock-json" class="json-output" readonly></textarea>
+				<div id="mock-preview" class="preview-grid"></div>
+			</section>
+
+			<section class="card">
+				<h2>Sheet test harness</h2>
+				<p class="hint">
+					Push the mock data into a Sheet and simulate bulk updates.
+				</p>
+				<div class="form-grid sheet-grid">
+					<label for="sheet-id">Spreadsheet ID or URL</label>
+					<input
+						id="sheet-id"
+						type="text"
+						placeholder="https://docs.google.com/spreadsheets/d/.../edit"
+					/>
+					<label for="sheet-name">Sheet tab</label>
+					<input id="sheet-name" type="text" value="Sheet1" />
+					<label for="sheet-bidder">Bidder</label>
+					<input id="sheet-bidder" type="text" placeholder="Bilal" />
+					<label for="sheet-viewed-rate">Viewed %</label>
+					<input
+						id="sheet-viewed-rate"
+						type="number"
+						min="0"
+						max="100"
+						value="60"
+					/>
+					<label for="sheet-connects-refund">Connects refund %</label>
+					<input
+						id="sheet-connects-refund"
+						type="number"
+						min="0"
+						max="100"
+						value="20"
+					/>
+					<label for="sheet-connects-boosted">Boosted connects %</label>
+					<input
+						id="sheet-connects-boosted"
+						type="number"
+						min="0"
+						max="100"
+						value="30"
+					/>
+				</div>
+				<div class="sheet-actions-grid">
+					<button id="sheet-save" class="ghost" type="button">
+						Save settings
+					</button>
+					<button id="sheet-open" class="ghost" type="button">
+						Open sheet
+					</button>
+					<button id="sheet-prepare" class="ghost" type="button">
+						Prepare sheet
+					</button>
+				</div>
+				<div class="sheet-actions-grid">
+					<button id="bulk-add" class="primary" type="button">
+						Bulk add jobs
+					</button>
+					<button id="bulk-edit" class="ghost" type="button">
+						Bulk edit jobs
+					</button>
+					<button id="bulk-viewed" class="ghost" type="button">
+						Mark viewed
+					</button>
+					<button id="bulk-connects" class="ghost" type="button">
+						Update connects
+					</button>
+				</div>
+				<div class="sheet-actions-grid full">
+					<button id="full-test" class="primary alt" type="button">
+						Run full test
+					</button>
+				</div>
+				<div id="sheet-log" class="output-panel">
+					No sheet actions yet.
+				</div>
+			</section>
+
+			<p id="dev-status" class="status">Ready.</p>
+		</div>
+
+		<script src="../js/popup/utils.js"></script>
+		<script src="../js/popup/storage.js"></script>
+		<script src="../js/popup/sheets.js"></script>
+		<script src="../js/popup/extraction.js"></script>
+		<script src="devpanel.js"></script>
+	</body>
+</html>

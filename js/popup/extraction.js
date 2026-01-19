@@ -1,4 +1,6 @@
-window.extractUpworkJobData = function extractUpworkJobData() {
+window.extractUpworkJobData = function extractUpworkJobData(docArg, hrefArg) {
+	const doc = docArg || document;
+	const href = hrefArg || window.location.href;
 	const normalize = (value) =>
 		String(value || "")
 			.replace(/\s+/g, " ")
@@ -21,9 +23,16 @@ window.extractUpworkJobData = function extractUpworkJobData() {
 		proposalId: "",
 	};
 
-	const url = new URL(window.location.href);
-	data.link = `${url.origin}${url.pathname}`;
-	const jobMatch = window.location.href.match(/~([0-9]+)/);
+	const sourceHref = String(href || "");
+	let url;
+	try {
+		url = new URL(sourceHref);
+	} catch (error) {
+		url = new URL("https://www.upwork.com/");
+	}
+	const origin = url.origin && url.origin !== "null" ? url.origin : "";
+	data.link = origin ? `${origin}${url.pathname}` : url.href;
+	const jobMatch = sourceHref.match(/~([0-9]+)/);
 	data.jobId = jobMatch ? jobMatch[1] : "";
 	data.date = new Date().toLocaleDateString("en-US", {
 		month: "short",
@@ -32,8 +41,8 @@ window.extractUpworkJobData = function extractUpworkJobData() {
 	});
 
 	const postedLine =
-		document.querySelector(".posted-on-line") ||
-		document.querySelector("[data-test='job-details'] .posted-on-line");
+		doc.querySelector(".posted-on-line") ||
+		doc.querySelector("[data-test='job-details'] .posted-on-line");
 	if (postedLine) {
 		const postedText = getText(
 			postedLine.querySelector(".text-light-on-muted")
@@ -44,8 +53,8 @@ window.extractUpworkJobData = function extractUpworkJobData() {
 	}
 
 	const clientLocation =
-		document.querySelector("[data-qa='client-location'] strong") ||
-		document.querySelector(
+		doc.querySelector("[data-qa='client-location'] strong") ||
+		doc.querySelector(
 			".cfe-ui-job-about-client [data-qa='client-location'] strong"
 		);
 	const locationText = getText(clientLocation);
@@ -53,23 +62,25 @@ window.extractUpworkJobData = function extractUpworkJobData() {
 		data.country = locationText;
 	}
 
-	const paymentText = normalize(document.body.textContent || "");
+	const paymentText = normalize(doc.body ? doc.body.textContent : "");
 	if (paymentText.toLowerCase().includes("payment method verified")) {
 		data.payment = "Verified";
-	} else if (paymentText.toLowerCase().includes("payment method not verified")) {
+	} else if (
+		paymentText.toLowerCase().includes("payment method not verified")
+	) {
 		data.payment = "Not verified";
 	}
 
 	const jobDetails =
-		document.querySelector(".job-details") ||
-		document.querySelector("[data-ev-sublocation='jobdetails']") ||
-		document.querySelector("[data-test='job-details']");
+		doc.querySelector(".job-details") ||
+		doc.querySelector("[data-ev-sublocation='jobdetails']") ||
+		doc.querySelector("[data-test='job-details']");
 
 	const headingCandidates = [];
 	if (jobDetails) {
 		headingCandidates.push(...jobDetails.querySelectorAll("h1, h2, h3, h4"));
 	}
-	headingCandidates.push(...document.querySelectorAll("h1, h2, h3, h4"));
+	headingCandidates.push(...doc.querySelectorAll("h1, h2, h3, h4"));
 
 	for (const heading of headingCandidates) {
 		const text = getText(heading);
@@ -80,12 +91,12 @@ window.extractUpworkJobData = function extractUpworkJobData() {
 	}
 
 	if (!data.name) {
-		const title = normalize(document.title);
+		const title = normalize(doc.title);
 		data.name = title.replace(/\s*-\s*Upwork.*$/i, "").trim();
 	}
 
 	const headings = Array.from(
-		document.querySelectorAll("h1, h2, h3, h4, h5, h6")
+		doc.querySelectorAll("h1, h2, h3, h4, h5, h6")
 	);
 	const activityHeading = headings.find(
 		(heading) => getText(heading).toLowerCase() === "activity on this job"
@@ -96,7 +107,7 @@ window.extractUpworkJobData = function extractUpworkJobData() {
 
 	const items = activitySection
 		? activitySection.querySelectorAll(".ca-item, li")
-		: document.querySelectorAll(".ca-item");
+		: doc.querySelectorAll(".ca-item");
 
 	items.forEach((item) => {
 		let label = getText(item.querySelector(".title"));
@@ -130,14 +141,14 @@ window.extractUpworkJobData = function extractUpworkJobData() {
 	});
 
 	const proposalLink =
-		Array.from(document.querySelectorAll("a")).find((anchor) => {
-			const href = anchor.getAttribute("href") || "";
-			if (!/\/(ab\/proposals|nx\/proposals)\/\d+/.test(href)) {
+		Array.from(doc.querySelectorAll("a")).find((anchor) => {
+			const hrefValue = anchor.getAttribute("href") || "";
+			if (!/\/(ab\/proposals|nx\/proposals)\/\d+/.test(hrefValue)) {
 				return false;
 			}
 			return getText(anchor).toLowerCase().includes("view proposal");
 		}) ||
-		document.querySelector(
+		doc.querySelector(
 			"a[href*='/ab/proposals/'], a[href*='/nx/proposals/']"
 		);
 
@@ -162,14 +173,24 @@ window.extractUpworkJobData = function extractUpworkJobData() {
 	return { ok: true, data };
 };
 
-window.extractUpworkViewedProposals = function extractUpworkViewedProposals() {
+window.extractUpworkJobDataFromDocument = function extractUpworkJobDataFromDocument(
+	doc,
+	href
+) {
+	return window.extractUpworkJobData(doc, href);
+};
+
+window.extractUpworkViewedProposals = function extractUpworkViewedProposals(
+	docArg
+) {
+	const doc = docArg || document;
 	const normalize = (value) =>
 		String(value || "")
 			.replace(/\s+/g, " ")
 			.trim();
 
 	const results = [];
-	const rows = Array.from(document.querySelectorAll("tr.details-row"));
+	const rows = Array.from(doc.querySelectorAll("tr.details-row"));
 
 	for (const row of rows) {
 		const link = row.querySelector("td.job-info a[href*='/nx/proposals/']");
@@ -202,7 +223,17 @@ window.extractUpworkViewedProposals = function extractUpworkViewedProposals() {
 	return { ok: true, proposals: results };
 };
 
-window.extractUpworkConnectsHistory = function extractUpworkConnectsHistory() {
+window.extractUpworkViewedProposalsFromDocument =
+	function extractUpworkViewedProposalsFromDocument(doc) {
+		return window.extractUpworkViewedProposals(doc);
+	};
+
+window.extractUpworkConnectsHistory = function extractUpworkConnectsHistory(
+	docArg,
+	originArg
+) {
+	const doc = docArg || document;
+	const origin = originArg || window.location.origin;
 	const normalize = (value) =>
 		String(value || "")
 			.replace(/\s+/g, " ")
@@ -212,7 +243,8 @@ window.extractUpworkConnectsHistory = function extractUpworkConnectsHistory() {
 			return "";
 		}
 		try {
-			return new URL(href, window.location.origin).toString();
+			const base = origin || "https://www.upwork.com";
+			return new URL(href, base).toString();
 		} catch (error) {
 			return href;
 		}
@@ -234,7 +266,7 @@ window.extractUpworkConnectsHistory = function extractUpworkConnectsHistory() {
 	});
 
 	const rows = Array.from(
-		document.querySelectorAll("#connects-history-table tbody tr")
+		doc.querySelectorAll("#connects-history-table tbody tr")
 	);
 	const entries = [];
 
@@ -284,3 +316,8 @@ window.extractUpworkConnectsHistory = function extractUpworkConnectsHistory() {
 
 	return { ok: true, entries };
 };
+
+window.extractUpworkConnectsHistoryFromDocument =
+	function extractUpworkConnectsHistoryFromDocument(doc, origin) {
+		return window.extractUpworkConnectsHistory(doc, origin);
+	};
