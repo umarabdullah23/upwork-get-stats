@@ -39,6 +39,21 @@ body {
 	max-width: 240px;
 }
 
+.toggle-field {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 11px;
+	font-weight: 600;
+	color: var(--muted);
+}
+
+.toggle-field input {
+	width: 14px;
+	height: 14px;
+	accent-color: var(--accent);
+}
+
 .bidder-field label {
 	font-size: 11px;
 	font-weight: 600;
@@ -66,6 +81,27 @@ body {
 	gap: 8px;
 	justify-content: flex-end;
 	flex-wrap: wrap;
+}
+
+.testing-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+}
+
+.testing-title {
+	display: grid;
+	gap: 4px;
+}
+
+.testing-details {
+	display: grid;
+	gap: 8px;
+}
+
+.testing-details[hidden] {
+	display: none !important;
 }
 
 .bidder-options {
@@ -200,6 +236,10 @@ button:disabled {
 	gap: 10px;
 	border: 1px solid rgba(15, 23, 42, 0.08);
 	box-shadow: 0 16px 24px var(--shadow);
+}
+
+.card[hidden] {
+	display: none !important;
 }
 
 .current-job {

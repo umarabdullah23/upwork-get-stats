@@ -12,6 +12,10 @@
 			<p class="kicker">Upwork helper</p>
 			<h1>Job activity reader</h1>
 			<p class="sub">Read-only. Pulls data from the current tab only.</p>
+			<label class="toggle-field">
+				<input id="show-testing" type="checkbox" />
+				<span>Show testing panel</span>
+			</label>
 			<div class="bidder-field">
 				<label for="bidder-input">Bidder</label>
 				<input
@@ -134,11 +138,6 @@
 						<input id="sheet-name" type="text" placeholder="Sheet1" />
 					</div>
 					<div class="sheet-actions">
-					<div class="sheet-actions-row align-right">
-						<button id="open-template" class="ghost tiny" type="button">
-							Open reference sheet
-						</button>
-					</div>
 						<div class="sheet-actions-row align-right">
 							<button
 								id="populate-job-ids"
@@ -159,20 +158,37 @@
 				</section>
 			</div>
 
-			<section class="card">
-				<h2>Testing</h2>
-				<p class="hint">Low-profile tools for dev validation.</p>
-				<div class="testing-actions">
-					<button id="prepare-sheet" class="ghost tiny subtle" type="button">
-						Prepare sheet
-					</button>
-					<button id="open-dev-panel" class="ghost tiny subtle" type="button">
-						Open dev panel
+			<p id="status" class="status">Open an Upwork job details page to begin.</p>
+
+			<section class="card" id="testing-card">
+				<div class="testing-header">
+					<div class="testing-title">
+						<h2>Testing</h2>
+					</div>
+					<button
+						id="toggle-testing"
+						class="ghost tiny"
+						type="button"
+						aria-expanded="false"
+					>
+						View more
 					</button>
 				</div>
+				<div id="testing-details" class="testing-details" hidden>
+					<p class="hint">Low-profile tools for dev validation.</p>
+					<div class="testing-actions">
+						<button id="prepare-sheet" class="ghost tiny subtle" type="button">
+							Prepare sheet
+						</button>
+						<button id="open-template" class="ghost tiny subtle" type="button">
+							Open reference sheet
+						</button>
+						<button id="open-dev-panel" class="ghost tiny subtle" type="button">
+							Open dev panel
+						</button>
+					</div>
+				</div>
 			</section>
-
-			<p id="status" class="status">Open an Upwork job details page to begin.</p>
 		</div>
 
 		<script src="js/popup/utils.js"></script>

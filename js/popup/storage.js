@@ -39,3 +39,21 @@ const saveBidder = (nextBidder) =>
 			resolve(!chrome.runtime.lastError);
 		});
 	});
+
+const getTestingVisibility = () =>
+	new Promise((resolve) => {
+		chrome.storage.sync.get(["showTesting"], (result) => {
+			if (chrome.runtime.lastError) {
+				resolve(false);
+				return;
+			}
+			resolve(Boolean(result.showTesting));
+		});
+	});
+
+const saveTestingVisibility = (visible) =>
+	new Promise((resolve) => {
+		chrome.storage.sync.set({ showTesting: Boolean(visible) }, () => {
+			resolve(!chrome.runtime.lastError);
+		});
+	});

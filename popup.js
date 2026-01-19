@@ -16,6 +16,10 @@ const sendSheetsButton = document.getElementById("send-sheets");
 const statusEl = document.getElementById("status");
 const bidderInput = document.getElementById("bidder-input");
 const openDevPanelButton = document.getElementById("open-dev-panel");
+const testingDetails = document.getElementById("testing-details");
+const toggleTestingButton = document.getElementById("toggle-testing");
+const showTestingCheckbox = document.getElementById("show-testing");
+const testingCard = document.getElementById("testing-card");
 
 const TESTING_PASSWORD = "umar";
 
@@ -38,6 +42,8 @@ let bidder = "";
 let saveTimer = null;
 let uiMode = "job";
 let jobDetailsExpanded = false;
+let testingExpanded = false;
+let showTestingPanel = false;
 let currentTabUrl = "";
 
 const setStatus = (message, tone = "") => {
@@ -344,6 +350,49 @@ const toggleJobDetails = () => {
 if (toggleJobDetailsButton) {
 	toggleJobDetailsButton.addEventListener("click", toggleJobDetails);
 }
+
+const toggleTestingDetails = () => {
+	if (!testingDetails || !toggleTestingButton) {
+		return;
+	}
+	testingExpanded = !testingExpanded;
+	testingDetails.hidden = !testingExpanded;
+	toggleTestingButton.textContent = testingExpanded
+		? "View less"
+		: "View more";
+	toggleTestingButton.setAttribute(
+		"aria-expanded",
+		testingExpanded ? "true" : "false"
+	);
+};
+
+if (toggleTestingButton) {
+	toggleTestingButton.addEventListener("click", toggleTestingDetails);
+}
+
+if (showTestingCheckbox) {
+	showTestingCheckbox.addEventListener("change", async (event) => {
+		const nextValue = Boolean(event.target.checked);
+		showTestingPanel = nextValue;
+		updateTestingVisibility();
+		if (typeof saveTestingVisibility === "function") {
+			await saveTestingVisibility(nextValue);
+		}
+	});
+}
+
+const updateTestingVisibility = () => {
+	if (!testingCard) {
+		return;
+	}
+	testingCard.hidden = !showTestingPanel;
+	if (!showTestingPanel && testingDetails && toggleTestingButton) {
+		testingDetails.hidden = true;
+		toggleTestingButton.textContent = "View more";
+		toggleTestingButton.setAttribute("aria-expanded", "false");
+		testingExpanded = false;
+	}
+};
 
 const scheduleSaveSheetsSettings = () => {
 	if (saveTimer) {
@@ -1366,6 +1415,20 @@ const loadSheetsSettings = async () => {
 };
 
 loadSheetsSettings();
+
+const loadTestingVisibility = async () => {
+	if (typeof getTestingVisibility !== "function") {
+		return;
+	}
+	const visible = await getTestingVisibility();
+	showTestingPanel = Boolean(visible);
+	if (showTestingCheckbox) {
+		showTestingCheckbox.checked = showTestingPanel;
+	}
+	updateTestingVisibility();
+};
+
+loadTestingVisibility();
 
 const setBidder = (nextBidder) => {
 	bidder = String(nextBidder || "").trim();
