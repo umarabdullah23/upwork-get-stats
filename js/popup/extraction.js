@@ -259,15 +259,88 @@ window.extractUpworkConnectsHistory = function extractUpworkConnectsHistory(
 		return Number.isFinite(parsed) ? parsed : 0;
 	};
 
-	const currentDate = new Date().toLocaleDateString("en-US", {
-		month: "short",
-		day: "numeric",
-		year: "numeric",
-	});
+	const formatDate = (value) => {
+		const text = normalize(value);
+		if (!text) {
+			return "";
+		}
+		const lower = text.toLowerCase();
+		const now = new Date();
+		if (lower === "today") {
+			return now.toLocaleDateString("en-US", {
+				month: "short",
+				day: "numeric",
+				year: "numeric",
+			});
+		}
+		if (lower === "yesterday") {
+			const yesterday = new Date(now);
+			yesterday.setDate(now.getDate() - 1);
+			return yesterday.toLocaleDateString("en-US", {
+				month: "short",
+				day: "numeric",
+				year: "numeric",
+			});
+		}
+		const parsed = new Date(text);
+		if (Number.isNaN(parsed.getTime())) {
+			return text;
+		}
+		return parsed.toLocaleDateString("en-US", {
+			month: "short",
+			day: "numeric",
+			year: "numeric",
+		});
+	};
 
-	const rows = Array.from(
-		doc.querySelectorAll("#connects-history-table tbody tr")
-	);
+	const findConnectsTable = () => {
+		const tables = Array.from(doc.querySelectorAll("table")).filter(
+			(table) =>
+				!table.closest("#fixture-connects-history") &&
+				!table.closest("[style*='display: none']")
+		);
+		const ariaCandidates = tables.filter((table) =>
+			String(table.getAttribute("aria-label") || "")
+				.toLowerCase()
+				.includes("connects")
+		);
+		if (ariaCandidates.length) {
+			return ariaCandidates.reduce((best, table) => {
+				if (!best) {
+					return table;
+				}
+				const bestRows = best.querySelectorAll("tbody tr").length;
+				const nextRows = table.querySelectorAll("tbody tr").length;
+				return nextRows > bestRows ? table : best;
+			}, null);
+		}
+		for (const table of tables) {
+			const headerCells = Array.from(
+				table.querySelectorAll("thead th, thead td")
+			);
+			const headerText = headerCells.map((cell) =>
+				normalize(cell.textContent || "")
+			);
+			if (
+				headerText.includes("Date") &&
+				headerText.includes("Action") &&
+				headerText.includes("Connects")
+			) {
+				return table;
+			}
+		}
+		return null;
+	};
+
+	const connectsTable = findConnectsTable();
+	let rows = [];
+	if (connectsTable) {
+		rows = Array.from(connectsTable.querySelectorAll("tbody tr"));
+	} else {
+		rows = Array.from(
+			doc.querySelectorAll("#connects-history-table tbody tr")
+		).filter((row) => !row.closest("#fixture-connects-history"));
+	}
 	const entries = [];
 
 	for (const row of rows) {
@@ -275,15 +348,22 @@ window.extractUpworkConnectsHistory = function extractUpworkConnectsHistory(
 		if (!cells.length) {
 			continue;
 		}
-		const dateText = currentDate;
+		const dateText = formatDate(cells[0]?.textContent || "");
 		const actionCell = cells[1];
 		const connectsCell = cells[cells.length - 1];
-		const actionText = normalize(
-			actionCell?.querySelector("small")?.textContent || ""
-		);
-		const isBoosted = actionText.toLowerCase().includes("boosted");
 		const link = actionCell?.querySelector("a[href*='/jobs/']") || null;
 		const href = link?.getAttribute("href") || "";
+		const linkText = normalize(link?.textContent || "");
+		let actionText = normalize(
+			actionCell?.querySelector("small")?.textContent ||
+				actionCell?.querySelector("span")?.textContent ||
+				actionCell?.textContent ||
+				""
+		);
+		if (linkText && actionText.includes(linkText)) {
+			actionText = normalize(actionText.replace(linkText, ""));
+		}
+		const isBoosted = /\bboost/i.test(actionText);
 		const jobLink = normalizeLink(href);
 		const match = href.match(/~(\d+)/);
 		const jobId = match ? match[1] : "";

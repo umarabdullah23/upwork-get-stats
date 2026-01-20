@@ -602,15 +602,15 @@ if (checkViewedButton) {
 			return;
 		}
 
-		const totals = new Map();
+		const connectsByJob = new Map();
 		for (const entry of entries) {
 			const jobIdValue = entry?.jobId ? String(entry.jobId).trim() : "";
 			const key = jobIdValue || normalizeJobName(entry?.title || "");
 			if (!key) {
 				continue;
 			}
-			if (!totals.has(key)) {
-				totals.set(key, {
+			if (!connectsByJob.has(key)) {
+				connectsByJob.set(key, {
 					jobId: jobIdValue,
 					name: entry.title || "",
 					link: entry.link || "",
@@ -621,13 +621,23 @@ if (checkViewedButton) {
 					boostedConnectsRefund: 0,
 				});
 			}
-			const target = totals.get(key);
-			target.connectsSpent += Number(entry.connectsSpent || 0);
-			target.connectsRefund += Number(entry.connectsRefund || 0);
-			target.boostedConnectsSpent += Number(entry.boostedConnectsSpent || 0);
-			target.boostedConnectsRefund += Number(
-				entry.boostedConnectsRefund || 0
-			);
+			const target = connectsByJob.get(key);
+			const spent = Number(entry.connectsSpent || 0);
+			const refund = Number(entry.connectsRefund || 0);
+			const boostedSpent = Number(entry.boostedConnectsSpent || 0);
+			const boostedRefund = Number(entry.boostedConnectsRefund || 0);
+			if (spent && !target.connectsSpent) {
+				target.connectsSpent = spent;
+			}
+			if (refund && !target.connectsRefund) {
+				target.connectsRefund = refund;
+			}
+			if (boostedSpent && !target.boostedConnectsSpent) {
+				target.boostedConnectsSpent = boostedSpent;
+			}
+			if (boostedRefund && !target.boostedConnectsRefund) {
+				target.boostedConnectsRefund = boostedRefund;
+			}
 			if (!target.name && entry.title) {
 				target.name = entry.title;
 			}
@@ -639,7 +649,7 @@ if (checkViewedButton) {
 			}
 		}
 
-		if (!totals.size) {
+		if (!connectsByJob.size) {
 			setStatus(
 				"No connects history entries with job IDs or job names found.",
 				"warn"
@@ -647,7 +657,7 @@ if (checkViewedButton) {
 			return;
 		}
 
-		setStatus(`Found ${totals.size} job(s). Updating sheet...`, "");
+		setStatus(`Found ${connectsByJob.size} job(s). Updating sheet...`, "");
 		const auth = await requestAuthToken(true);
 		if (!auth.ok) {
 			setStatus(auth.error || "Google authorization failed.", "error");
@@ -670,7 +680,7 @@ if (checkViewedButton) {
 			setStatus("Unable to read Job ID column from the sheet.", "error");
 			return;
 		}
-		const needsBoostedColumns = Array.from(totals.values()).some(
+		const needsBoostedColumns = Array.from(connectsByJob.values()).some(
 			(entry) =>
 				entry.boostedConnectsSpent > 0 || entry.boostedConnectsRefund > 0
 		);
@@ -717,7 +727,7 @@ if (checkViewedButton) {
 		let nextRowIndex = emptyRowInfo.nextRowIndex;
 		const newRowIndexes = [];
 		const appendedRowIndexes = [];
-		for (const entry of totals.values()) {
+		for (const entry of connectsByJob.values()) {
 			let existing = entry.jobId ? connectsMap.map.get(entry.jobId) : null;
 			if (!existing) {
 				const normalizedName = normalizeJobName(entry.name || "");
@@ -760,12 +770,6 @@ if (checkViewedButton) {
 					entry.boostedConnectsRefund,
 					"refund"
 				);
-				if (activeBidder) {
-					updates.push({
-						range: `'${normalizeSheetName(sheetName).replace(/'/g, "''")}'!C${existing.rowIndex}:C${existing.rowIndex}`,
-						values: [[activeBidder]],
-					});
-				}
 				if (connectsMap.connectsSpentColumn) {
 					updates.push({
 						range: `'${normalizeSheetName(sheetName).replace(/'/g, "''")}'!${connectsMap.connectsSpentColumn}${existing.rowIndex}`,
