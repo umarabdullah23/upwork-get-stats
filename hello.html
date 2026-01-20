@@ -12,19 +12,18 @@
 			<p class="kicker">Upwork helper</p>
 			<h1>Job activity reader</h1>
 			<p class="sub">Read-only. Pulls data from the current tab only.</p>
+			<label class="toggle-field">
+				<input id="show-testing" type="checkbox" />
+				<span>Show testing panel</span>
+			</label>
 			<div class="bidder-field">
 				<label for="bidder-input">Bidder</label>
 				<input
 					id="bidder-input"
 					type="text"
-					list="bidder-suggestions"
-					placeholder="Bilal"
+					placeholder="Name"
 					autocomplete="off"
 				/>
-				<datalist id="bidder-suggestions">
-					<option value="Bilal"></option>
-					<option value="Mehak"></option>
-				</datalist>
 			</div>
 		</header>
 
@@ -46,10 +45,10 @@
 						</button>
 						<button id="read-page" class="ghost tiny" type="button">
 							<span class="icon-inline" aria-hidden="true">
-								<svg viewBox="0 0 24 24">
+								<svg viewBox="0 0 24 24" aria-hidden="true">
 									<path
-										d="M17.65 6.35A7.95 7.95 0 0012 4V1L7 6l5 5V7a5 5 0 015 5 5 5 0 01-8.66 3.54l-1.42 1.42A7 7 0 1019 12c0-1.93-.78-3.68-2.05-4.95z"
-									/>
+										d="M16.023 9.348h4.992V4.356m0 4.992-4.992-4.992m0 0A9 9 0 1 0 20.035 15.35"
+									></path>
 								</svg>
 							</span>
 							Refetch
@@ -134,9 +133,14 @@
 						<input id="sheet-name" type="text" placeholder="Sheet1" />
 					</div>
 					<div class="sheet-actions">
-						<div class="sheet-actions-row">
-							<button id="prepare-sheet" class="ghost tiny" type="button">
-								Prepare sheet
+						<div class="sheet-actions-row align-right">
+							<button
+								id="populate-job-ids"
+								class="ghost tiny"
+								type="button"
+								hidden
+							>
+								Populate job IDs
 							</button>
 						</div>
 						<button id="send-sheets" class="primary" type="button" disabled>
@@ -150,8 +154,43 @@
 			</div>
 
 			<p id="status" class="status">Open an Upwork job details page to begin.</p>
+
+			<section class="card" id="testing-card">
+				<div class="testing-header">
+					<div class="testing-title">
+						<h2>Testing</h2>
+					</div>
+					<button
+						id="toggle-testing"
+						class="ghost tiny"
+						type="button"
+						aria-expanded="false"
+					>
+						View more
+					</button>
+				</div>
+				<div id="testing-details" class="testing-details" hidden>
+					<p class="hint">Low-profile tools for dev validation.</p>
+					<div class="testing-actions">
+						<button id="prepare-sheet" class="ghost tiny subtle" type="button">
+							Prepare sheet
+						</button>
+						<button id="open-template" class="ghost tiny subtle" type="button">
+							Open reference sheet
+						</button>
+						<button id="open-dev-panel" class="ghost tiny subtle" type="button">
+							Open dev panel
+						</button>
+					</div>
+				</div>
+			</section>
 		</div>
 
+		<script src="js/popup/utils.js"></script>
+		<script src="js/popup/storage.js"></script>
+		<script src="js/popup/extraction.js"></script>
+		<script src="js/popup/tabs.js"></script>
+		<script src="js/popup/sheets.js"></script>
 		<script src="popup.js"></script>
 	</body>
 </html>

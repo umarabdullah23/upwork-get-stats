@@ -10,9 +10,18 @@ const spreadsheetInput = document.getElementById("spreadsheet-id");
 const sheetNameInput = document.getElementById("sheet-name");
 const openSheetButton = document.getElementById("open-sheet");
 const prepareSheetButton = document.getElementById("prepare-sheet");
+const populateJobIdsButton = document.getElementById("populate-job-ids");
+const openTemplateButton = document.getElementById("open-template");
 const sendSheetsButton = document.getElementById("send-sheets");
 const statusEl = document.getElementById("status");
 const bidderInput = document.getElementById("bidder-input");
+const openDevPanelButton = document.getElementById("open-dev-panel");
+const testingDetails = document.getElementById("testing-details");
+const toggleTestingButton = document.getElementById("toggle-testing");
+const showTestingCheckbox = document.getElementById("show-testing");
+const testingCard = document.getElementById("testing-card");
+
+const TESTING_PASSWORD = "umar";
 
 const fields = {
 	name: document.getElementById("field-name"),
@@ -33,10 +42,151 @@ let bidder = "";
 let saveTimer = null;
 let uiMode = "job";
 let jobDetailsExpanded = false;
+let testingExpanded = false;
+let showTestingPanel = false;
+let currentTabUrl = "";
 
 const setStatus = (message, tone = "") => {
 	statusEl.textContent = message;
 	statusEl.className = `status ${tone}`.trim();
+};
+
+const requestAuthToken = async (interactive, timeoutMs = 15000) => {
+	const timeout = new Promise((resolve) => {
+		setTimeout(
+			() =>
+				resolve({
+					ok: false,
+					error: "Google authorization timed out.",
+				}),
+			timeoutMs
+		);
+	});
+	return Promise.race([getAuthToken(interactive), timeout]);
+};
+
+const withTimeout = (promise, timeoutMs, errorMessage) =>
+	Promise.race([
+		promise,
+		new Promise((_, reject) =>
+			setTimeout(() => reject(new Error(errorMessage)), timeoutMs)
+		),
+	]);
+
+const isSheetUrl = (value) =>
+	/https?:\/\/docs\.google\.com\/spreadsheets/i.test(String(value || ""));
+
+const extractHyperlinkUrl = (value) => {
+	const text = String(value || "").trim();
+	if (!text) {
+		return "";
+	}
+	if (text.startsWith("=")) {
+		const match = text.match(/HYPERLINK\(\s*\"([^\"]+)\"/i);
+		return match ? match[1] : "";
+	}
+	return text;
+};
+
+const extractJobIdFromLink = (value) => {
+	const url = extractHyperlinkUrl(value);
+	if (!url) {
+		return "";
+	}
+	const match = url.match(/~([A-Za-z0-9]+)/);
+	return match ? match[1] : "";
+};
+
+const getValidationOptions = (dataValidation) => {
+	const condition = dataValidation?.condition;
+	if (!condition) {
+		return null;
+	}
+	const type = String(condition.type || "");
+	if (!type.includes("ONE_OF_LIST")) {
+		return null;
+	}
+	return (condition.values || [])
+		.map((value) => String(value?.userEnteredValue || "").trim())
+		.filter(Boolean);
+};
+
+const validationAllowsValue = (dataValidation, value) => {
+	const trimmed = String(value || "").trim();
+	if (!trimmed) {
+		return true;
+	}
+	const options = getValidationOptions(dataValidation);
+	if (!options || !options.length) {
+		return true;
+	}
+	return options.includes(trimmed);
+};
+
+const verifyTestingPassword = (actionLabel) => {
+	const entered = window.prompt(`Enter password to ${actionLabel}:`);
+	if (entered === null) {
+		return false;
+	}
+	return entered === TESTING_PASSWORD;
+};
+
+const parseConnectsCellValue = (value) => {
+	const match = String(value || "").replace(/,/g, "").match(/[+-]?\d+(\.\d+)?/);
+	if (!match) {
+		return 0;
+	}
+	const parsed = Number(match[0]);
+	return Number.isFinite(parsed) ? Math.abs(parsed) : 0;
+};
+
+const formatConnectsValue = (value, kind) => {
+	const numeric = Number(value);
+	if (!Number.isFinite(numeric) || numeric <= 0) {
+		return "";
+	}
+	const prefix = kind === "refund" ? "+" : "-";
+	return `${prefix}${Math.abs(numeric)}`;
+};
+
+const rowNeedsTemplateValidation = async (token, id, name, rowIndex) => {
+	if (!rowIndex) {
+		return false;
+	}
+	const bidderValidation = await getCellDataValidation(
+		token,
+		id,
+		name,
+		`C${rowIndex}`
+	);
+	if (!bidderValidation) {
+		return true;
+	}
+	const jobStatusValidation = await getCellDataValidation(
+		token,
+		id,
+		name,
+		`L${rowIndex}`
+	);
+	return !jobStatusValidation;
+};
+
+const applyExistingJobStatus = (row, emptyRowInfo, rowIndex) => {
+	if (!row || !emptyRowInfo || !rowIndex) {
+		return row;
+	}
+	const jobStatusIndexes = emptyRowInfo.jobStatusIndexes || [];
+	const statusValues = emptyRowInfo.jobStatusValuesByRow?.get(rowIndex);
+	if (!jobStatusIndexes.length || !statusValues) {
+		return row;
+	}
+	jobStatusIndexes.forEach((columnIndex, index) => {
+		const existing = String(statusValues[index] || "").trim();
+		if (existing) {
+			row[columnIndex] = existing;
+		}
+	});
+	return row;
 };
 
 const setFields = (data) => {
@@ -81,6 +231,11 @@ const setButtons = () => {
 	}
 	sendSheetsButton.disabled = !currentData || !spreadsheetId;
 	openSheetButton.disabled = !getCurrentSpreadsheetId();
+	if (populateJobIdsButton) {
+		const showPopulate = isSheetUrl(currentTabUrl);
+		populateJobIdsButton.hidden = !showPopulate;
+		populateJobIdsButton.disabled = !showPopulate;
+	}
 	if (checkViewedButton) {
 		checkViewedButton.disabled = !spreadsheetId;
 	}
@@ -108,11 +263,11 @@ const setMode = (mode) => {
 		if (toggleJobDetailsButton) {
 			toggleJobDetailsButton.hidden = true;
 		}
-		if (readButton) {
-			readButton.hidden = true;
-		}
 		if (currentJobActions) {
-			currentJobActions.hidden = true;
+			currentJobActions.hidden = false;
+		}
+		if (readButton) {
+			readButton.hidden = false;
 		}
 		if (sendSheetsButton) {
 			sendSheetsButton.hidden = true;
@@ -120,6 +275,38 @@ const setMode = (mode) => {
 		if (copyButton) {
 			copyButton.hidden = true;
 		}
+		checkViewedButton.textContent = "Update proposal views";
+		checkViewedButton.hidden = false;
+	} else if (mode === "connects") {
+		if (currentJobCard) {
+			currentJobCard.hidden = false;
+		}
+		if (currentJobStatus) {
+			currentJobStatus.textContent = "Connects history detected";
+			currentJobStatus.classList.remove("is-fetched");
+			currentJobStatus.classList.remove("is-empty");
+			currentJobStatus.classList.add("is-detected");
+		}
+		if (jobDetails) {
+			jobDetailsExpanded = false;
+			jobDetails.hidden = true;
+		}
+		if (toggleJobDetailsButton) {
+			toggleJobDetailsButton.hidden = true;
+		}
+		if (currentJobActions) {
+			currentJobActions.hidden = false;
+		}
+		if (readButton) {
+			readButton.hidden = false;
+		}
+		if (sendSheetsButton) {
+			sendSheetsButton.hidden = true;
+		}
+		if (copyButton) {
+			copyButton.hidden = true;
+		}
+		checkViewedButton.textContent = "Update connects history";
 		checkViewedButton.hidden = false;
 	} else {
 		if (currentJobCard) {
@@ -164,64 +351,48 @@ if (toggleJobDetailsButton) {
 	toggleJobDetailsButton.addEventListener("click", toggleJobDetails);
 }
 
-const detectModeFromUrl = (url) => {
-	if (!url) {
-		return "job";
+const toggleTestingDetails = () => {
+	if (!testingDetails || !toggleTestingButton) {
+		return;
 	}
-	try {
-		const parsed = new URL(url);
-		const path = parsed.pathname || "";
-		if (/\/Proposals\.html$/i.test(path) || /\/test_data\/Proposals\.html$/i.test(path)) {
-			return "proposals";
+	testingExpanded = !testingExpanded;
+	testingDetails.hidden = !testingExpanded;
+	toggleTestingButton.textContent = testingExpanded
+		? "View less"
+		: "View more";
+	toggleTestingButton.setAttribute(
+		"aria-expanded",
+		testingExpanded ? "true" : "false"
+	);
+};
+
+if (toggleTestingButton) {
+	toggleTestingButton.addEventListener("click", toggleTestingDetails);
+}
+
+if (showTestingCheckbox) {
+	showTestingCheckbox.addEventListener("change", async (event) => {
+		const nextValue = Boolean(event.target.checked);
+		showTestingPanel = nextValue;
+		updateTestingVisibility();
+		if (typeof saveTestingVisibility === "function") {
+			await saveTestingVisibility(nextValue);
 		}
-		if (parsed.hostname.endsWith("upwork.com")) {
-			if (path.startsWith("/nx/proposals")) {
-				return "proposals";
-			}
-		}
-	} catch (error) {
-		// ignore invalid URLs
-	}
-	return "job";
-};
-
-const normalizeSheetName = (value) => {
-	const trimmed = String(value || "").trim();
-	return trimmed || "Sheet1";
-};
-
-const extractSpreadsheetId = (value) => {
-	const trimmed = String(value || "").trim();
-	if (!trimmed) {
-		return "";
-	}
-	const match = trimmed.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
-	return match ? match[1] : trimmed;
-};
-
-const getSheetsSettings = () =>
-	new Promise((resolve) => {
-		chrome.storage.sync.get(["spreadsheetId", "sheetName"], (result) => {
-			if (chrome.runtime.lastError) {
-				resolve({ spreadsheetId: "", sheetName: "Sheet1" });
-				return;
-			}
-			resolve({
-				spreadsheetId: result.spreadsheetId || "",
-				sheetName: result.sheetName || "Sheet1",
-			});
-		});
 	});
+}
 
-const saveSheetsSettings = (nextId, nextName) =>
-	new Promise((resolve) => {
-		chrome.storage.sync.set(
-			{ spreadsheetId: nextId, sheetName: nextName },
-			() => {
-				resolve(!chrome.runtime.lastError);
-			}
-		);
-	});
+const updateTestingVisibility = () => {
+	if (!testingCard) {
+		return;
+	}
+	testingCard.hidden = !showTestingPanel;
+	if (!showTestingPanel && testingDetails && toggleTestingButton) {
+		testingDetails.hidden = true;
+		toggleTestingButton.textContent = "View more";
+		toggleTestingButton.setAttribute("aria-expanded", "false");
+		testingExpanded = false;
+	}
+};
 
 const scheduleSaveSheetsSettings = () => {
 	if (saveTimer) {
@@ -256,880 +427,26 @@ const openSpreadsheet = (id) => {
 	}
 };
 
-const escapeCsv = (value) => {
-	const text = String(value ?? "");
-	if (/[",\n]/.test(text)) {
-		return `"${text.replace(/"/g, '""')}"`;
-	}
-	return text;
-};
-
-const formatSheetDate = (value) => {
-	const text = String(value || "").trim();
-	if (!text) {
-		return "";
-	}
-	return `'${text}`;
-};
-
-const toCsvRow = (data) =>
-	[
-		data.date,
-		data.name,
-		data.bidder,
-		"",
-		"",
-		"",
-		"",
-		"",
-		"",
-		"",
-		"",
-		"",
-		data.invitesSent,
-		data.unansweredInvites,
-		data.interviewing,
-		"",
-		data.payment,
-		data.country,
-		data.jobCreatedSince,
-		"",
-		data.proposals,
-		data.jobId,
-		data.proposalId || "--",
-	]
-		.map(escapeCsv)
-		.join(",");
-
-const buildSheetRow = (data) => {
-	const safeName = String(data.name || "").replace(/"/g, '""');
-	const safeLink = String(data.link || "").replace(/"/g, '""');
-	const nameCell =
-		safeName && safeLink
-			? `=HYPERLINK("${safeLink}","${safeName}")`
-			: data.name || "";
-
-	return [
-		formatSheetDate(data.date),
-		nameCell,
-		data.bidder || "",
-		"",
-		"",
-		"",
-		"",
-		"",
-		"",
-		"",
-		"",
-		"",
-		data.invitesSent || "",
-		data.unansweredInvites || "",
-		data.interviewing || "",
-		"",
-		data.payment || "",
-		data.country || "",
-		data.jobCreatedSince || "",
-		"",
-		data.proposals || "",
-		data.jobId || "",
-		data.proposalId || "--",
-	];
-};
-
-const formatRange = (name) => {
-	const normalized = normalizeSheetName(name);
-	const escaped = normalized.replace(/'/g, "''");
-	return `'${escaped}'!A1`;
-};
-
-const getAuthToken = (interactive) =>
-	new Promise((resolve) => {
-		if (!chrome.identity) {
-			resolve({ ok: false, error: "Missing chrome.identity permission." });
-			return;
-		}
-		chrome.identity.getAuthToken({ interactive }, (token) => {
-			if (chrome.runtime.lastError || !token) {
-				const rawMessage =
-					chrome.runtime.lastError?.message || "Auth failed.";
-				const extensionId = chrome?.runtime?.id || "";
-				const normalizedMessage = rawMessage.toLowerCase();
-				if (normalizedMessage.includes("bad client id")) {
-					resolve({
-						ok: false,
-						error:
-							`OAuth2 failed: bad client id. ` +
-							`This usually means the OAuth client in manifest.json isn't a Chrome Extension OAuth client, ` +
-							`or it's bound to a different extension ID than the one you installed (${extensionId}).`,
-					});
-					return;
-				}
-				resolve({
-					ok: false,
-					error: rawMessage,
-				});
-				return;
-			}
-			resolve({ ok: true, token });
-		});
-	});
-
-const removeCachedToken = (token) =>
-	new Promise((resolve) => {
-		if (!chrome.identity) {
-			resolve();
-			return;
-		}
-		chrome.identity.removeCachedAuthToken({ token }, () => resolve());
-	});
-
-const appendRow = async (token, id, name, row) => {
-	const range = formatRange(name);
-	const url = new URL(
-		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}/values/${encodeURIComponent(range)}:append`
-	);
-	url.searchParams.set("valueInputOption", "USER_ENTERED");
-	url.searchParams.set("insertDataOption", "INSERT_ROWS");
-
-	return fetch(url.toString(), {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${token}`,
-			"Content-Type": "application/json",
-		},
-		body: JSON.stringify({ values: [row] }),
-	});
-};
-
-const findRowByJobId = async (token, id, name, jobId) => {
-	if (!jobId) {
-		return null;
-	}
-	const range = `'${normalizeSheetName(name).replace(/'/g, "''")}'!V:V`;
-	const url = new URL(
-		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}/values/${encodeURIComponent(range)}`
-	);
-	const response = await fetch(url.toString(), {
-		headers: { Authorization: `Bearer ${token}` },
-	});
-	if (!response.ok) {
-		return null;
-	}
-	const data = await response.json();
-	const values = data.values || [];
-	for (let i = 1; i < values.length; i += 1) {
-		const cell = values[i]?.[0];
-		if (String(cell || "").trim() === String(jobId).trim()) {
-			return i + 1;
-		}
-	}
-	return null;
-};
-
-const getProposalIdRowMap = async (token, id, name) => {
-	const range = `'${normalizeSheetName(name).replace(/'/g, "''")}'!W:W`;
-	const url = new URL(
-		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}/values/${encodeURIComponent(range)}`
-	);
-	const response = await fetch(url.toString(), {
-		headers: { Authorization: `Bearer ${token}` },
-	});
-	if (!response.ok) {
-		return null;
-	}
-	const data = await response.json();
-	const values = data.values || [];
-	const map = new Map();
-	for (let i = 1; i < values.length; i += 1) {
-		const cell = values[i]?.[0];
-		const normalized = String(cell || "").trim();
-		if (normalized) {
-			map.set(normalized, i + 1);
-		}
-	}
-	return map;
-};
-
-const getCellValue = async (token, id, name, cell) => {
-	if (!cell) {
-		return "";
-	}
-	const normalized = normalizeSheetName(name);
-	const escaped = normalized.replace(/'/g, "''");
-	const range = `'${escaped}'!${cell}`;
-	const url = new URL(
-		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}/values/${encodeURIComponent(range)}`
-	);
-	const response = await fetch(url.toString(), {
-		headers: { Authorization: `Bearer ${token}` },
-	});
-	if (!response.ok) {
-		return "";
-	}
-	const data = await response.json();
-	return data.values?.[0]?.[0] || "";
-};
-
-const setReadCellsViewed = async (token, id, name, rowIndexes) => {
-	if (!rowIndexes || !rowIndexes.length) {
-		return false;
-	}
-	const sheetId = await getSheetId(token, id, name);
-	if (sheetId === null) {
-		return false;
-	}
-	const url = new URL(
-		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}:batchUpdate`
-	);
-	const green = { red: 0.8, green: 0.95, blue: 0.8 };
-	const requests = rowIndexes.map((rowIndex) => ({
-		repeatCell: {
-			range: {
-				sheetId,
-				startRowIndex: rowIndex - 1,
-				endRowIndex: rowIndex,
-				startColumnIndex: 6,
-				endColumnIndex: 7,
-			},
-			cell: {
-				userEnteredFormat: {
-					backgroundColor: green,
-				},
-			},
-			fields: "userEnteredFormat.backgroundColor",
-		},
-	}));
-	const response = await fetch(url.toString(), {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${token}`,
-			"Content-Type": "application/json",
-		},
-		body: JSON.stringify({ requests }),
-	});
-	return response.ok;
-};
-
-const updateRow = async (token, id, name, rowIndex, row) => {
-	const normalized = normalizeSheetName(name);
-	const escaped = normalized.replace(/'/g, "''");
-	const range = `'${escaped}'!A${rowIndex}:W${rowIndex}`;
-	const url = new URL(
-		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}/values/${encodeURIComponent(range)}`
-	);
-	url.searchParams.set("valueInputOption", "USER_ENTERED");
-	return fetch(url.toString(), {
-		method: "PUT",
-		headers: {
-			Authorization: `Bearer ${token}`,
-			"Content-Type": "application/json",
-		},
-		body: JSON.stringify({ values: [row] }),
-	});
-};
-
-const clearRowBold = async (token, id, name, rowIndex, columnCount) => {
-	const sheetId = await getSheetId(token, id, name);
-	if (sheetId === null || !rowIndex) {
-		return false;
-	}
-	const url = new URL(
-		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}:batchUpdate`
-	);
-	const requests = [
-		{
-			repeatCell: {
-				range: {
-					sheetId,
-					startRowIndex: rowIndex - 1,
-					endRowIndex: rowIndex,
-					startColumnIndex: 0,
-					endColumnIndex: columnCount,
-				},
-				cell: {
-					userEnteredFormat: {
-						textFormat: { bold: false },
-					},
-				},
-				fields: "userEnteredFormat.textFormat.bold",
-			},
-		},
-	];
-	const response = await fetch(url.toString(), {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${token}`,
-			"Content-Type": "application/json",
-		},
-		body: JSON.stringify({ requests }),
-	});
-	return response.ok;
-};
-
-const getRowIndexFromRange = (range) => {
-	if (!range) {
-		return null;
-	}
-	const match = range.match(/!([A-Z]+)(\\d+)(:([A-Z]+)(\\d+))?/);
-	if (!match) {
-		return null;
-	}
-	const start = Number(match[2]);
-	const end = match[5] ? Number(match[5]) : start;
-	if (!Number.isFinite(start) || !Number.isFinite(end) || start !== end) {
-		return null;
-	}
-	return start;
-};
-
-const setHeaders = async (token, id, name) => {
-	const range = formatRange(name);
-	const url = new URL(
-		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}/values/${encodeURIComponent(range)}`
-	);
-	url.searchParams.set("valueInputOption", "RAW");
-	const headers = [
-		"Date",
-		"Job Name",
-		"Bidder",
-		"Boost",
-		"Invited",
-		"Customer",
-		"Read",
-		"Reply",
-		"Call",
-		"Quote",
-		"Sale",
-		"Job Status",
-		"Invites Sent",
-		"Unanswered Invites",
-		"Interviewing",
-		"Remarks",
-		"Payment",
-		"Country",
-		"Job Created Since",
-		"Job Status",
-		"Proposals",
-		"Job ID",
-		"Proposal ID",
-	];
-	return fetch(url.toString(), {
-		method: "PUT",
-		headers: {
-			Authorization: `Bearer ${token}`,
-			"Content-Type": "application/json",
-		},
-		body: JSON.stringify({ values: [headers] }),
-	});
-};
-
-const setHeaderBold = async (token, id, name, columnCount) => {
-	const sheetId = await getSheetId(token, id, name);
-	if (sheetId === null) {
-		return false;
-	}
-	const url = new URL(
-		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}:batchUpdate`
-	);
-	const requests = [
-		{
-			repeatCell: {
-				range: {
-					sheetId,
-					startRowIndex: 0,
-					endRowIndex: 1,
-					startColumnIndex: 0,
-					endColumnIndex: columnCount,
-				},
-				cell: {
-					userEnteredFormat: {
-						textFormat: { bold: true },
-					},
-				},
-				fields: "userEnteredFormat.textFormat.bold",
-			},
-		},
-	];
-	const response = await fetch(url.toString(), {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${token}`,
-			"Content-Type": "application/json",
-		},
-		body: JSON.stringify({ requests }),
-	});
-	return response.ok;
-};
-
-const freezeHeaderRow = async (token, id, name) => {
-	const sheetId = await getSheetId(token, id, name);
-	if (sheetId === null) {
-		return false;
-	}
-	const requests = [
-		{
-			updateSheetProperties: {
-				properties: {
-					sheetId,
-					gridProperties: { frozenRowCount: 1 },
-				},
-				fields: "gridProperties.frozenRowCount",
-			},
-		},
-	];
-	const response = await fetch(
-		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}:batchUpdate`,
-		{
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${token}`,
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify({ requests }),
-		}
-	);
-	return response.ok;
-};
-
-const clearBodyBold = async (token, id, name, columnCount, endRowIndex) => {
-	const sheetId = await getSheetId(token, id, name);
-	if (sheetId === null) {
-		return false;
-	}
-	const url = new URL(
-		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}:batchUpdate`
-	);
-	const requests = [
-		{
-			repeatCell: {
-				range: {
-					sheetId,
-					startRowIndex: 1,
-					endRowIndex,
-					startColumnIndex: 0,
-					endColumnIndex: columnCount,
-				},
-				cell: {
-					userEnteredFormat: {
-						textFormat: { bold: false },
-					},
-				},
-				fields: "userEnteredFormat.textFormat.bold",
-			},
-		},
-	];
-	const response = await fetch(url.toString(), {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${token}`,
-			"Content-Type": "application/json",
-		},
-		body: JSON.stringify({ requests }),
-	});
-	return response.ok;
-};
-
-const setBodyColumnColors = async (token, id, name, endRowIndex) => {
-	const sheetId = await getSheetId(token, id, name);
-	if (sheetId === null) {
-		return false;
-	}
-	const purple = { red: 0.91, green: 0.84, blue: 0.89 };
-	const red = { red: 0.96, green: 0.8, blue: 0.79 };
-	const requests = [
-		{
-			repeatCell: {
-				range: {
-					sheetId,
-					startRowIndex: 1,
-					endRowIndex,
-					startColumnIndex: 3,
-					endColumnIndex: 4,
-				},
-				cell: {
-					userEnteredFormat: {
-						backgroundColor: purple,
-					},
-				},
-				fields: "userEnteredFormat.backgroundColor",
-			},
-		},
-		{
-			repeatCell: {
-				range: {
-					sheetId,
-					startRowIndex: 1,
-					endRowIndex,
-					startColumnIndex: 6,
-					endColumnIndex: 11,
-				},
-				cell: {
-					userEnteredFormat: {
-						backgroundColor: red,
-					},
-				},
-				fields: "userEnteredFormat.backgroundColor",
-			},
-		},
-	];
-	const response = await fetch(
-		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}:batchUpdate`,
-		{
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${token}`,
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify({ requests }),
-		}
-	);
-	return response.ok;
-};
-
-const getSheetId = async (token, id, name) => {
-	const url = new URL(
-		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(id)}`
-	);
-	url.searchParams.set("fields", "sheets.properties");
-	const response = await fetch(url.toString(), {
-		headers: { Authorization: `Bearer ${token}` },
-	});
-	if (!response.ok) {
-		return null;
-	}
-	const data = await response.json();
-	const match = (data.sheets || []).find(
-		(sheet) => sheet?.properties?.title === name
-	);
-	return match?.properties?.sheetId ?? null;
-};
-
-const ensureBidderDropdown = async (token, id, name) => {
-	const sheetId = await getSheetId(token, id, name);
-	if (sheetId === null) {
+readButton.addEventListener("click", async () => {
+	if (uiMode !== "job") {
+		await refreshMode();
 		return;
 	}
-	const url = new URL(
-		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}:batchUpdate`
-	);
-	const requests = [
-		{
-			repeatCell: {
-				range: {
-					sheetId,
-					startRowIndex: 1,
-					startColumnIndex: 2,
-					endColumnIndex: 3,
-				},
-				cell: {
-					dataValidation: {
-						condition: {
-							type: "ONE_OF_LIST",
-							values: [
-								{ userEnteredValue: "Bilal" },
-								{ userEnteredValue: "Mehak" },
-							],
-						},
-						strict: true,
-						showCustomUi: true,
-					},
-				},
-				fields: "dataValidation",
-			},
-		},
-	];
-	await fetch(url.toString(), {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${token}`,
-			"Content-Type": "application/json",
-		},
-		body: JSON.stringify({ requests }),
-	});
-};
-
-const queryActiveTab = () =>
-	new Promise((resolve) => {
-		chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-			resolve(tabs && tabs.length ? tabs[0] : null);
-		});
-	});
-
-const executeExtraction = (tabId) =>
-	new Promise((resolve) => {
-		chrome.scripting.executeScript(
-			{
-				target: { tabId },
-				func: extractUpworkJobData,
-			},
-			(results) => {
-				if (chrome.runtime.lastError) {
-					resolve({ ok: false, error: chrome.runtime.lastError.message });
-					return;
-				}
-				resolve(results && results[0] ? results[0].result : { ok: false });
-			}
-		);
-	});
-
-const executeProposalScan = (tabId) =>
-	new Promise((resolve) => {
-		chrome.scripting.executeScript(
-			{
-				target: { tabId },
-				func: extractUpworkViewedProposals,
-			},
-			(results) => {
-				if (chrome.runtime.lastError) {
-					resolve({ ok: false, error: chrome.runtime.lastError.message });
-					return;
-				}
-				resolve(results && results[0] ? results[0].result : { ok: false });
-			}
-		);
-	});
-
-function extractUpworkJobData() {
-	const normalize = (value) =>
-		String(value || "")
-			.replace(/\s+/g, " ")
-			.trim();
-	const getText = (el) => normalize(el ? el.textContent : "");
-
-	const data = {
-		name: "",
-		link: "",
-		jobId: "",
-		date: "",
-		payment: "",
-		country: "",
-		jobCreatedSince: "",
-		proposals: "",
-		invitesSent: "",
-		interviewing: "",
-		lastViewed: "",
-		unansweredInvites: "",
-		proposalId: "",
-	};
-
-	const url = new URL(window.location.href);
-	data.link = `${url.origin}${url.pathname}`;
-	const jobMatch = window.location.href.match(/~([0-9]+)/);
-	data.jobId = jobMatch ? jobMatch[1] : "";
-	data.date = new Date().toLocaleDateString("en-US", {
-		month: "short",
-		day: "numeric",
-		year: "numeric",
-	});
-
-	const postedLine =
-		document.querySelector(".posted-on-line") ||
-		document.querySelector("[data-test='job-details'] .posted-on-line");
-	if (postedLine) {
-		const postedText = getText(
-			postedLine.querySelector(".text-light-on-muted")
-		);
-		if (postedText) {
-			data.jobCreatedSince = postedText;
-		}
-	}
-
-	const clientLocation =
-		document.querySelector("[data-qa='client-location'] strong") ||
-		document.querySelector(".cfe-ui-job-about-client [data-qa='client-location'] strong");
-	const locationText = getText(clientLocation);
-	if (locationText) {
-		data.country = locationText;
-	}
-
-	const paymentText = normalize(document.body.textContent || "");
-	if (paymentText.toLowerCase().includes("payment method verified")) {
-		data.payment = "Verified";
-	} else if (paymentText.toLowerCase().includes("payment method not verified")) {
-		data.payment = "Not verified";
-	}
-
-	const jobDetails =
-		document.querySelector(".job-details") ||
-		document.querySelector("[data-ev-sublocation='jobdetails']") ||
-		document.querySelector("[data-test='job-details']");
-
-	const headingCandidates = [];
-	if (jobDetails) {
-		headingCandidates.push(...jobDetails.querySelectorAll("h1, h2, h3, h4"));
-	}
-	headingCandidates.push(...document.querySelectorAll("h1, h2, h3, h4"));
-
-	for (const heading of headingCandidates) {
-		const text = getText(heading);
-		if (text && text.toLowerCase() !== "activity on this job") {
-			data.name = text;
-			break;
-		}
-	}
-
-	if (!data.name) {
-		const title = normalize(document.title);
-		data.name = title.replace(/\s*-\s*Upwork.*$/i, "").trim();
-	}
-
-	const headings = Array.from(
-		document.querySelectorAll("h1, h2, h3, h4, h5, h6")
-	);
-	const activityHeading = headings.find(
-		(heading) => getText(heading).toLowerCase() === "activity on this job"
-	);
-	const activitySection = activityHeading
-		? activityHeading.closest("section") || activityHeading.parentElement
-		: null;
-
-	const items = activitySection
-		? activitySection.querySelectorAll(".ca-item, li")
-		: document.querySelectorAll(".ca-item");
-
-	items.forEach((item) => {
-		let label = getText(item.querySelector(".title"));
-		let value = getText(item.querySelector(".value"));
-
-		if (!label || !value) {
-			const text = getText(item);
-			const parts = text.split(":");
-			if (parts.length >= 2) {
-				label = label || parts[0];
-				value = value || parts.slice(1).join(":").trim();
-			}
-		}
-
-		if (!label || !value) {
-			return;
-		}
-
-		const key = label.toLowerCase().replace(/\s+/g, " ").replace(/:$/, "");
-		if (key === "proposals") {
-			data.proposals = value;
-		} else if (key === "last viewed by client") {
-			data.lastViewed = value;
-		} else if (key === "interviewing") {
-			data.interviewing = value;
-		} else if (key === "invites sent") {
-			data.invitesSent = value;
-		} else if (key === "unanswered invites") {
-			data.unansweredInvites = value;
-		}
-	});
-
-	const proposalLink =
-		Array.from(document.querySelectorAll("a")).find((anchor) => {
-			const href = anchor.getAttribute("href") || "";
-			if (!/\/(ab\/proposals|nx\/proposals)\/\d+/.test(href)) {
-				return false;
-			}
-			return getText(anchor).toLowerCase().includes("view proposal");
-		}) ||
-		document.querySelector("a[href*='/ab/proposals/'], a[href*='/nx/proposals/']");
-
-	const proposalHref = proposalLink?.getAttribute("href") || "";
-	const proposalMatch = proposalHref.match(/\/(ab\/proposals|nx\/proposals)\/(\d+)/);
-	data.proposalId = proposalMatch ? proposalMatch[2] : "";
-
-	const hasData =
-		data.name ||
-		data.proposals ||
-		data.invitesSent ||
-		data.interviewing ||
-		data.lastViewed ||
-		data.unansweredInvites;
-
-	if (!hasData) {
-		return { ok: false, error: "No job activity found on this page." };
-	}
-
-	return { ok: true, data };
-}
-
-function extractUpworkViewedProposals() {
-	const normalize = (value) =>
-		String(value || "")
-			.replace(/\s+/g, " ")
-			.trim();
-
-	const results = [];
-	const rows = Array.from(document.querySelectorAll("tr.details-row"));
-
-	for (const row of rows) {
-		const link = row.querySelector("td.job-info a[href*='/nx/proposals/']");
-		if (!link) {
-			continue;
-		}
-		const href = link.getAttribute("href") || "";
-		const match = href.match(/\/nx\/proposals\/(\d+)/);
-		if (!match) {
-			continue;
-		}
-
-		const viewsCell = row.querySelector("td.proposal-views-slot");
-		let viewed = false;
-		if (viewsCell && !viewsCell.classList.contains("d-none")) {
-			const text = normalize(viewsCell.textContent).toLowerCase();
-			viewed =
-				text.includes("viewed by client") ||
-				Boolean(viewsCell.querySelector(".last-seen")) ||
-				Boolean(viewsCell.querySelector("[id^='proposal-views-mark']"));
-		}
-
-		results.push({
-			proposalId: match[1],
-			title: normalize(link.textContent),
-			viewed,
-		});
-	}
-
-	return { ok: true, proposals: results };
-}
-
-readButton.addEventListener("click", async () => {
 	setStatus("Reading current tab...", "");
 	const tab = await queryActiveTab();
 
-	if (!tab || !tab.id || !tab.url) {
+	if (!tab || !tab.id) {
 		setStatus("No active tab detected.", "warn");
-		return;
-	}
-
-	if (!tab.url.includes("upwork.com")) {
-		setStatus("Open an Upwork job details page first.", "warn");
 		return;
 	}
 
 	const result = await executeExtraction(tab.id);
 	if (!result.ok) {
-		setStatus(result.error || "Unable to read this page.", "error");
+		if (result.error === "No job activity found on this page.") {
+			setStatus("Open an Upwork job details page first.", "warn");
+		} else {
+			setStatus(result.error || "Unable to read this page.", "error");
+		}
 		return;
 	}
 
@@ -1142,16 +459,11 @@ readButton.addEventListener("click", async () => {
 
 if (checkViewedButton) {
 	checkViewedButton.addEventListener("click", async () => {
-		setStatus("Scanning proposals page...", "");
+		setStatus("Scanning page...", "");
 		const tab = await queryActiveTab();
 
-		if (!tab || !tab.id || !tab.url) {
+		if (!tab || !tab.id) {
 			setStatus("No active tab detected.", "warn");
-			return;
-		}
-
-		if (detectModeFromUrl(tab.url) !== "proposals") {
-			setStatus("Open https://www.upwork.com/nx/proposals/ first.", "warn");
 			return;
 		}
 
@@ -1160,67 +472,466 @@ if (checkViewedButton) {
 			return;
 		}
 
-		const scan = await executeProposalScan(tab.id);
-		if (!scan.ok) {
-			setStatus(scan.error || "Unable to scan proposals on this page.", "error");
-			return;
-		}
+		const mode = detectModeFromUrl(tab.url || "");
+		if (mode === "proposals") {
+			const scan = await executeProposalScan(tab.id);
+			if (!scan.ok) {
+				setStatus(
+					scan.error || "Unable to scan proposals on this page.",
+					"error"
+				);
+				return;
+			}
 
-		const proposals = Array.isArray(scan.proposals) ? scan.proposals : [];
-		const viewed = proposals.filter((item) => item?.viewed && item?.proposalId);
-		if (!viewed.length) {
-			setStatus("No 'Viewed by client' proposals found on this page.", "warn");
-			return;
-		}
+			const proposals = Array.isArray(scan.proposals) ? scan.proposals : [];
+			const viewed = proposals.filter(
+				(item) => item?.viewed && item?.proposalId
+			);
+			if (!viewed.length) {
+				setStatus("No 'Viewed by client' proposals found on this page.", "warn");
+				return;
+			}
 
-		setStatus(`Found ${viewed.length} viewed proposal(s). Updating sheet...`, "");
-		const auth = await getAuthToken(true);
-		if (!auth.ok) {
-			setStatus(auth.error || "Google authorization failed.", "error");
-			return;
-		}
+			setStatus(
+				`Found ${viewed.length} viewed proposal(s). Updating sheet...`,
+				""
+			);
+			const auth = await requestAuthToken(true);
+			if (!auth.ok) {
+				setStatus(auth.error || "Google authorization failed.", "error");
+				return;
+			}
 
-		const idMap = await getProposalIdRowMap(
+			setStatus("Reading sheet data...", "");
+			let headers;
+			let idMap;
+			try {
+				headers = await withTimeout(
+					getSheetHeaders(auth.token, spreadsheetId, sheetName),
+					20000,
+					"Sheet header read timed out."
+				);
+				idMap = await withTimeout(
+					getProposalIdRowMap(
+						auth.token,
+						spreadsheetId,
+						sheetName,
+						headers
+					),
+					20000,
+					"Sheet Proposal ID read timed out."
+				);
+			} catch (error) {
+				setStatus(error.message || "Sheet read timed out.", "error");
+				return;
+			}
+			if (!idMap) {
+				setStatus("Unable to read Proposal ID column from the sheet.", "error");
+				return;
+			}
+
+			const matchedRows = [];
+			let nameMap;
+			let nameMapLoaded = false;
+			for (const item of viewed) {
+				const rowIndex = idMap.get(String(item.proposalId).trim());
+				if (rowIndex) {
+					matchedRows.push(rowIndex);
+					continue;
+				}
+				const normalized = normalizeJobName(item.title || "");
+				if (!normalized) {
+					continue;
+				}
+				if (!nameMapLoaded) {
+					nameMap = await getJobNameRowMap(
+						auth.token,
+						spreadsheetId,
+						sheetName,
+						headers
+					);
+					nameMapLoaded = true;
+				}
+				const fallbackRow = nameMap?.get(normalized);
+				if (fallbackRow) {
+					matchedRows.push(fallbackRow);
+				}
+			}
+			const uniqueRows = Array.from(new Set(matchedRows)).sort((a, b) => a - b);
+			if (!uniqueRows.length) {
+				setStatus(
+					`Found ${viewed.length} viewed proposal(s), but none matched the sheet's Proposal ID or Job Name columns.`,
+					"warn"
+				);
+				return;
+			}
+
+		const readColumnIndex = getHeaderIndex(headers || [], "Read");
+		const ok = await setReadCellsViewed(
 			auth.token,
 			spreadsheetId,
-			sheetName
+			sheetName,
+			uniqueRows,
+			readColumnIndex ? readColumnIndex - 1 : undefined
 		);
-		if (!idMap) {
-			setStatus("Unable to read Proposal ID column from the sheet.", "error");
+			if (!ok) {
+				setStatus("Failed to update the sheet formatting.", "error");
+				return;
+			}
+			setStatus(
+				`Marked ${uniqueRows.length} row(s) as read (green).`,
+				"success"
+			);
 			return;
 		}
 
-		const matchedRows = [];
-		for (const item of viewed) {
-			const rowIndex = idMap.get(String(item.proposalId).trim());
-			if (rowIndex) {
-				matchedRows.push(rowIndex);
+		if (mode !== "connects") {
+			setStatus("Open the connects history page first.", "warn");
+			return;
+		}
+
+		const scan = await executeConnectsHistoryScan(tab.id);
+		if (!scan.ok) {
+			setStatus(scan.error || "Unable to scan connects history.", "error");
+			return;
+		}
+
+		const entries = Array.isArray(scan.entries) ? scan.entries : [];
+		if (!entries.length) {
+			setStatus("No connects history entries found.", "warn");
+			return;
+		}
+
+		const connectsByJob = new Map();
+		for (const entry of entries) {
+			const jobIdValue = entry?.jobId ? String(entry.jobId).trim() : "";
+			const key = jobIdValue || normalizeJobName(entry?.title || "");
+			if (!key) {
+				continue;
+			}
+			if (!connectsByJob.has(key)) {
+				connectsByJob.set(key, {
+					jobId: jobIdValue,
+					name: entry.title || "",
+					link: entry.link || "",
+					date: entry.date || "",
+					connectsSpent: 0,
+					connectsRefund: 0,
+					boostedConnectsSpent: 0,
+					boostedConnectsRefund: 0,
+				});
+			}
+			const target = connectsByJob.get(key);
+			const spent = Number(entry.connectsSpent || 0);
+			const refund = Number(entry.connectsRefund || 0);
+			const boostedSpent = Number(entry.boostedConnectsSpent || 0);
+			const boostedRefund = Number(entry.boostedConnectsRefund || 0);
+			if (spent && !target.connectsSpent) {
+				target.connectsSpent = spent;
+			}
+			if (refund && !target.connectsRefund) {
+				target.connectsRefund = refund;
+			}
+			if (boostedSpent && !target.boostedConnectsSpent) {
+				target.boostedConnectsSpent = boostedSpent;
+			}
+			if (boostedRefund && !target.boostedConnectsRefund) {
+				target.boostedConnectsRefund = boostedRefund;
+			}
+			if (!target.name && entry.title) {
+				target.name = entry.title;
+			}
+			if (!target.link && entry.link) {
+				target.link = entry.link;
+			}
+			if (!target.date && entry.date) {
+				target.date = entry.date;
 			}
 		}
 
-		const uniqueRows = Array.from(new Set(matchedRows)).sort((a, b) => a - b);
-		if (!uniqueRows.length) {
+		if (!connectsByJob.size) {
 			setStatus(
-				`Found ${viewed.length} viewed proposal(s), but none matched the sheet's Proposal ID column.`,
+				"No connects history entries with job IDs or job names found.",
 				"warn"
 			);
 			return;
 		}
 
-		const ok = await setReadCellsViewed(
-			auth.token,
-			spreadsheetId,
-			sheetName,
-			uniqueRows
-		);
-		if (!ok) {
-			setStatus("Failed to update the sheet formatting.", "error");
+		setStatus(`Found ${connectsByJob.size} job(s). Updating sheet...`, "");
+		const auth = await requestAuthToken(true);
+		if (!auth.ok) {
+			setStatus(auth.error || "Google authorization failed.", "error");
 			return;
 		}
-		setStatus(
-			`Marked ${uniqueRows.length} row(s) as read (green).`,
-			"success"
+
+		setStatus("Reading sheet data...", "");
+		let connectsMap;
+		try {
+			connectsMap = await withTimeout(
+				getConnectsRowMap(auth.token, spreadsheetId, sheetName),
+				20000,
+				"Sheet Job ID read timed out."
+			);
+		} catch (error) {
+			setStatus(error.message || "Sheet read timed out.", "error");
+			return;
+		}
+		if (!connectsMap) {
+			setStatus("Unable to read Job ID column from the sheet.", "error");
+			return;
+		}
+		const needsBoostedColumns = Array.from(connectsByJob.values()).some(
+			(entry) =>
+				entry.boostedConnectsSpent > 0 || entry.boostedConnectsRefund > 0
 		);
+		if (
+			needsBoostedColumns &&
+			(!connectsMap.boostedConnectsSpentColumn ||
+				!connectsMap.boostedConnectsRefundColumn)
+		) {
+			setStatus(
+				"Sheet is missing boosted connects columns. Run Prepare sheet first.",
+				"warn"
+			);
+			return;
+		}
+
+		const updates = [];
+		const newRowUpdates = [];
+		const headers = connectsMap.headers || [];
+		const activeBidder = String(bidderInput?.value || bidder || "").trim();
+		let jobNameMap;
+		let jobNameMapLoaded = false;
+		let emptyRowInfo;
+		try {
+			emptyRowInfo = await withTimeout(
+				getEmptyRowIndexes(
+					auth.token,
+					spreadsheetId,
+					sheetName,
+					headers
+				),
+				20000,
+				"Sheet row scan timed out."
+			);
+		} catch (error) {
+			setStatus(error.message || "Sheet read timed out.", "error");
+			return;
+		}
+		if (!emptyRowInfo) {
+			setStatus("Unable to read sheet rows.", "error");
+			return;
+		}
+		setStatus("Updating sheet...", "");
+		const emptyRowQueue = [...emptyRowInfo.emptyRows];
+		let nextRowIndex = emptyRowInfo.nextRowIndex;
+		const newRowIndexes = [];
+		const appendedRowIndexes = [];
+		for (const entry of connectsByJob.values()) {
+			let existing = entry.jobId ? connectsMap.map.get(entry.jobId) : null;
+			if (!existing) {
+				const normalizedName = normalizeJobName(entry.name || "");
+				if (normalizedName) {
+					if (!jobNameMapLoaded) {
+						jobNameMap = await getJobNameRowMap(
+							auth.token,
+							spreadsheetId,
+							sheetName,
+							headers
+						);
+						jobNameMapLoaded = true;
+					}
+					const fallbackRowIndex = jobNameMap?.get(normalizedName);
+					if (fallbackRowIndex) {
+						existing = connectsMap.rowsByIndex.get(fallbackRowIndex) || {
+							rowIndex: fallbackRowIndex,
+							connectsSpent: "",
+							connectsRefund: "",
+							boostedConnectsSpent: "",
+							boostedConnectsRefund: "",
+						};
+					}
+				}
+			}
+			if (existing) {
+				const nextSpentValue = formatConnectsValue(
+					entry.connectsSpent,
+					"spent"
+				);
+				const nextRefundValue = formatConnectsValue(
+					entry.connectsRefund,
+					"refund"
+				);
+				const nextBoostedSpentValue = formatConnectsValue(
+					entry.boostedConnectsSpent,
+					"spent"
+				);
+				const nextBoostedRefundValue = formatConnectsValue(
+					entry.boostedConnectsRefund,
+					"refund"
+				);
+				if (connectsMap.connectsSpentColumn) {
+					updates.push({
+						range: `'${normalizeSheetName(sheetName).replace(/'/g, "''")}'!${connectsMap.connectsSpentColumn}${existing.rowIndex}`,
+						values: [[nextSpentValue]],
+					});
+				}
+				if (connectsMap.connectsRefundColumn) {
+					updates.push({
+						range: `'${normalizeSheetName(sheetName).replace(/'/g, "''")}'!${connectsMap.connectsRefundColumn}${existing.rowIndex}`,
+						values: [[nextRefundValue]],
+					});
+				}
+				if (connectsMap.boostedConnectsSpentColumn) {
+					updates.push({
+						range: `'${normalizeSheetName(sheetName).replace(/'/g, "''")}'!${connectsMap.boostedConnectsSpentColumn}${existing.rowIndex}`,
+						values: [[nextBoostedSpentValue]],
+					});
+				}
+				if (connectsMap.boostedConnectsRefundColumn) {
+					updates.push({
+						range: `'${normalizeSheetName(sheetName).replace(/'/g, "''")}'!${connectsMap.boostedConnectsRefundColumn}${existing.rowIndex}`,
+						values: [[nextBoostedRefundValue]],
+					});
+				}
+				continue;
+			}
+
+			const row = buildRowFromHeaders(headers, {
+				date: entry.date,
+				name: entry.name,
+				link: entry.link,
+				bidder: activeBidder,
+				jobId: entry.jobId,
+				connectsSpent: formatConnectsValue(entry.connectsSpent, "spent"),
+				connectsRefund: formatConnectsValue(entry.connectsRefund, "refund"),
+				boostedConnectsSpent: formatConnectsValue(
+					entry.boostedConnectsSpent,
+					"spent"
+				),
+				boostedConnectsRefund: formatConnectsValue(
+					entry.boostedConnectsRefund,
+					"refund"
+				),
+				proposalId: "--",
+			});
+			const useEmptyRow = emptyRowQueue.length > 0;
+			const targetRowIndex = useEmptyRow
+				? emptyRowQueue.shift()
+				: nextRowIndex;
+			if (!useEmptyRow) {
+				nextRowIndex += 1;
+			}
+			applyExistingJobStatus(row, emptyRowInfo, targetRowIndex);
+			if (!useEmptyRow) {
+				appendedRowIndexes.push(targetRowIndex);
+			}
+			updates.push({
+				range: `'${normalizeSheetName(sheetName).replace(/'/g, "''")}'!A${targetRowIndex}:${getColumnLetter(connectsMap.columnCount)}${targetRowIndex}`,
+				values: [row],
+			});
+			newRowUpdates.push({
+				range: `'${normalizeSheetName(sheetName).replace(/'/g, "''")}'!A${targetRowIndex}:${getColumnLetter(connectsMap.columnCount)}${targetRowIndex}`,
+				values: [row],
+			});
+			newRowIndexes.push(targetRowIndex);
+		}
+
+		const response = await batchUpdateValues(
+			auth.token,
+			spreadsheetId,
+			updates
+		);
+		if (!response.ok) {
+			setStatus(`Sheets API error ${response.status}.`, "error");
+			return;
+		}
+		setStatus("Formatting in progress...", "");
+		try {
+			const targetSheetId = await getSheetId(
+				auth.token,
+				spreadsheetId,
+				sheetName
+			);
+			const rowsNeedingTemplate = [];
+			for (const rowIndex of newRowIndexes) {
+				const needsTemplate = await rowNeedsTemplateValidation(
+					auth.token,
+					spreadsheetId,
+					sheetName,
+					rowIndex
+				);
+				if (needsTemplate) {
+					rowsNeedingTemplate.push(rowIndex);
+				}
+			}
+			if (rowsNeedingTemplate.length) {
+				let templateSheetId = await ensureTemplateSheet(
+					auth.token,
+					spreadsheetId
+				);
+				const bidderValidation = templateSheetId
+					? await getCellDataValidation(
+							auth.token,
+							spreadsheetId,
+							"__Upwork Template",
+							"C2"
+						)
+					: null;
+				if (
+					templateSheetId &&
+					activeBidder &&
+					!validationAllowsValue(bidderValidation, activeBidder)
+				) {
+					templateSheetId = await ensureTemplateSheet(
+						auth.token,
+						spreadsheetId,
+						true
+					);
+				}
+				let appliedTemplate = false;
+				if (templateSheetId && targetSheetId !== null) {
+					appliedTemplate = await applyTemplateRowToRows(
+						auth.token,
+						spreadsheetId,
+						templateSheetId,
+						targetSheetId,
+						rowsNeedingTemplate,
+						DEFAULT_HEADER_COUNT
+					);
+				}
+				if (!appliedTemplate) {
+					await applyRowTemplatesInSheet(
+						auth.token,
+						spreadsheetId,
+						sheetName,
+						2,
+						rowsNeedingTemplate,
+						DEFAULT_HEADER_COUNT
+					);
+				}
+				for (const rowIndex of rowsNeedingTemplate) {
+					await clearRowsValues(
+						auth.token,
+						spreadsheetId,
+						sheetName,
+						rowIndex,
+						rowIndex,
+						DEFAULT_HEADER_COUNT
+					);
+				}
+				if (newRowUpdates.length) {
+					await batchUpdateValues(
+						auth.token,
+						spreadsheetId,
+						newRowUpdates
+					);
+				}
+			}
+			setStatus("Connects history updated.", "success");
+		} catch (error) {
+			setStatus("Connects history updated; formatting skipped.", "warn");
+		}
 	});
 }
 
@@ -1250,6 +961,144 @@ openSheetButton.addEventListener("click", () => {
 	openSpreadsheet(nextId);
 });
 
+if (openTemplateButton) {
+	openTemplateButton.addEventListener("click", () => {
+		const templateId = window.TEMPLATE_SPREADSHEET_ID;
+		if (!templateId) {
+			setStatus("Reference sheet not configured.", "warn");
+			return;
+		}
+		openSpreadsheet(templateId);
+	});
+}
+
+if (openDevPanelButton) {
+	openDevPanelButton.addEventListener("click", () => {
+		if (!verifyTestingPassword("open the dev panel")) {
+			setStatus("Dev panel access canceled or password incorrect.", "warn");
+			return;
+		}
+		const url = chrome?.runtime?.getURL
+			? chrome.runtime.getURL("devpanel/devpanel.html")
+			: "devpanel/devpanel.html";
+		if (chrome?.tabs?.create) {
+			chrome.tabs.create({ url });
+		} else {
+			window.open(url, "_blank", "noopener");
+		}
+	});
+}
+
+if (populateJobIdsButton) {
+	populateJobIdsButton.addEventListener("click", async () => {
+		if (!spreadsheetId) {
+			setStatus("Save your Sheets settings first.", "warn");
+			return;
+		}
+		setStatus("Connecting to Google...", "");
+		const auth = await requestAuthToken(true);
+		if (!auth.ok) {
+			setStatus(auth.error || "Google authorization failed.", "error");
+			return;
+		}
+		setStatus("Reading sheet data...", "");
+		let headers;
+		try {
+			headers = await withTimeout(
+				getSheetHeaders(auth.token, spreadsheetId, sheetName),
+				20000,
+				"Sheet header read timed out."
+			);
+		} catch (error) {
+			setStatus(error.message || "Sheet read timed out.", "error");
+			return;
+		}
+		if (!headers) {
+			setStatus("Unable to read sheet headers.", "error");
+			return;
+		}
+		const jobNameIndex = getHeaderIndex(headers, "Job Name");
+		const jobIdIndex = getHeaderIndex(headers, "Job ID");
+		if (!jobNameIndex || !jobIdIndex) {
+			setStatus("Sheet needs Job Name and Job ID columns.", "error");
+			return;
+		}
+		let jobNameValues;
+		let jobIdValues;
+		try {
+			[jobNameValues, jobIdValues] = await Promise.all([
+				withTimeout(
+					getColumnValues(
+						auth.token,
+						spreadsheetId,
+						sheetName,
+						jobNameIndex - 1,
+						2,
+						{ valueRenderOption: "FORMULA" }
+					),
+					20000,
+					"Sheet Job Name read timed out."
+				),
+				withTimeout(
+					getColumnValues(
+						auth.token,
+						spreadsheetId,
+						sheetName,
+						jobIdIndex - 1,
+						2
+					),
+					20000,
+					"Sheet Job ID read timed out."
+				),
+			]);
+		} catch (error) {
+			setStatus(error.message || "Sheet read timed out.", "error");
+			return;
+		}
+		if (!jobNameValues) {
+			setStatus("Unable to read Job Name column.", "error");
+			return;
+		}
+		const updates = [];
+		const rowCount = Math.max(
+			jobNameValues.length,
+			jobIdValues?.length || 0
+		);
+		const columnLetter = getColumnLetter(jobIdIndex);
+		const escapedName = normalizeSheetName(sheetName).replace(/'/g, "''");
+		for (let i = 0; i < rowCount; i += 1) {
+			const jobId = extractJobIdFromLink(jobNameValues[i]?.[0] || "");
+			if (!jobId) {
+				continue;
+			}
+			const existing = String(jobIdValues?.[i]?.[0] || "").trim();
+			if (existing === jobId) {
+				continue;
+			}
+			const rowIndex = i + 2;
+			updates.push({
+				range: `'${escapedName}'!${columnLetter}${rowIndex}`,
+				values: [[jobId]],
+			});
+		}
+		if (!updates.length) {
+			setStatus("Job IDs already up to date.", "success");
+			return;
+		}
+		setStatus("Populating job IDs...", "");
+		const response = await batchUpdateValues(
+			auth.token,
+			spreadsheetId,
+			updates
+		);
+		if (!response.ok) {
+			setStatus(`Sheets API error ${response.status}.`, "error");
+			return;
+		}
+		setStatus(`Job IDs populated (${updates.length}).`, "success");
+	});
+}
+
 spreadsheetInput.addEventListener("input", () => {
 	setButtons();
 	scheduleSaveSheetsSettings();
@@ -1264,10 +1113,46 @@ prepareSheetButton.addEventListener("click", async () => {
 		setStatus("Save your Sheets settings first.", "warn");
 		return;
 	}
+	if (!verifyTestingPassword("prepare the sheet")) {
+		setStatus("Sheet preparation canceled or password incorrect.", "warn");
+		return;
+	}
 	setStatus("Preparing sheet...", "");
-	const auth = await getAuthToken(true);
+	const auth = await requestAuthToken(true);
 	if (!auth.ok) {
 		setStatus(auth.error || "Google authorization failed.", "error");
+		return;
+	}
+	await removeBlankHeaderColumn(
+		auth.token,
+		spreadsheetId,
+		sheetName,
+		18,
+		"Job Status"
+	);
+	const templateResult = await applyTemplateFormatting(
+		auth.token,
+		spreadsheetId,
+		sheetName
+	);
+	if (templateResult.ok) {
+		const headerResponse = await setHeaders(
+			auth.token,
+			spreadsheetId,
+			sheetName
+		);
+		if (!headerResponse.ok) {
+			setStatus(`Sheets API error ${headerResponse.status}.`, "error");
+			return;
+		}
+		await setHeaderBold(
+			auth.token,
+			spreadsheetId,
+			sheetName,
+			DEFAULT_HEADER_COUNT
+		);
+		await freezeHeaderRow(auth.token, spreadsheetId, sheetName);
+		setStatus("Sheet prepared from template.", "success");
 		return;
 	}
 	const headerResponse = await setHeaders(auth.token, spreadsheetId, sheetName);
@@ -1275,12 +1160,24 @@ prepareSheetButton.addEventListener("click", async () => {
 		setStatus(`Sheets API error ${headerResponse.status}.`, "error");
 		return;
 	}
-	await setHeaderBold(auth.token, spreadsheetId, sheetName, 23);
-	await clearBodyBold(auth.token, spreadsheetId, sheetName, 23, 1000);
+	await setHeaderBold(
+		auth.token,
+		spreadsheetId,
+		sheetName,
+		DEFAULT_HEADER_COUNT
+	);
+	await clearBodyBold(
+		auth.token,
+		spreadsheetId,
+		sheetName,
+		DEFAULT_HEADER_COUNT,
+		1000
+	);
 	await setBodyColumnColors(auth.token, spreadsheetId, sheetName, 1000);
 	await freezeHeaderRow(auth.token, spreadsheetId, sheetName);
-	await ensureBidderDropdown(auth.token, spreadsheetId, sheetName);
-	setStatus("Sheet prepared with headers and bidder dropdown.", "success");
+	await ensureJobStatusDropdown(auth.token, spreadsheetId, sheetName);
+	await ensureJobStatusColors(auth.token, spreadsheetId, sheetName);
+	setStatus("Sheet prepared with headers and dropdowns.", "success");
 });
 
 sendSheetsButton.addEventListener("click", async () => {
@@ -1295,7 +1192,7 @@ sendSheetsButton.addEventListener("click", async () => {
 	}
 
 	setStatus("Connecting to Google...", "");
-	const auth = await getAuthToken(true);
+	const auth = await requestAuthToken(true);
 	if (!auth.ok) {
 		setStatus(auth.error || "Google authorization failed.", "error");
 		return;
@@ -1303,18 +1200,37 @@ sendSheetsButton.addEventListener("click", async () => {
 	let activeToken = auth.token;
 
 	let row = null;
-	await ensureBidderDropdown(activeToken, spreadsheetId, sheetName);
+	let newRowIndex = null;
+	let emptyRowInfo = null;
+	setStatus("Reading sheet data...", "");
+	let headers;
+	try {
+		headers = await withTimeout(
+			getSheetHeaders(activeToken, spreadsheetId, sheetName),
+			20000,
+			"Sheet header read timed out."
+		);
+	} catch (error) {
+		setStatus(error.message || "Sheet read timed out.", "error");
+		return;
+	}
+	if (!headers) {
+		setStatus("Unable to read sheet headers.", "error");
+		return;
+	}
+	setStatus("Updating sheet...", "");
 	let response;
 	let existingRow = await findRowByJobId(
 		activeToken,
 		spreadsheetId,
 		sheetName,
-		currentData.jobId
+		currentData.jobId,
+		headers
 	);
 	if (existingRow) {
 		const [existingDate, existingCreatedSince] = await Promise.all([
 			getCellValue(activeToken, spreadsheetId, sheetName, `A${existingRow}`),
-			getCellValue(activeToken, spreadsheetId, sheetName, `S${existingRow}`),
+			getCellValue(activeToken, spreadsheetId, sheetName, `R${existingRow}`),
 		]);
 		if (existingDate) {
 			currentData.date = existingDate;
@@ -1322,7 +1238,7 @@ sendSheetsButton.addEventListener("click", async () => {
 		if (existingCreatedSince) {
 			currentData.jobCreatedSince = existingCreatedSince;
 		}
-		row = buildSheetRow(currentData);
+		row = buildRowFromHeaders(headers, currentData);
 		response = await updateRow(
 			activeToken,
 			spreadsheetId,
@@ -1331,12 +1247,42 @@ sendSheetsButton.addEventListener("click", async () => {
 			row
 		);
 	} else {
-		row = buildSheetRow(currentData);
-		response = await appendRow(activeToken, spreadsheetId, sheetName, row);
+		try {
+			emptyRowInfo = await withTimeout(
+				getEmptyRowIndexes(
+					activeToken,
+					spreadsheetId,
+					sheetName,
+					headers
+				),
+				20000,
+				"Sheet row scan timed out."
+			);
+		} catch (error) {
+			setStatus(error.message || "Sheet read timed out.", "error");
+			return;
+		}
+		if (!emptyRowInfo) {
+			setStatus("Unable to read sheet rows.", "error");
+			return;
+		}
+		const hasEmptyRow = emptyRowInfo.emptyRows.length > 0;
+		newRowIndex = hasEmptyRow
+			? emptyRowInfo.emptyRows[0]
+			: emptyRowInfo.nextRowIndex;
+		row = buildRowFromHeaders(headers, currentData);
+		row = applyExistingJobStatus(row, emptyRowInfo, newRowIndex);
+		response = await updateRow(
+			activeToken,
+			spreadsheetId,
+			sheetName,
+			newRowIndex,
+			row
+		);
 	}
 	if (response.status === 401 || response.status === 403) {
 		await removeCachedToken(activeToken);
-		const retryAuth = await getAuthToken(true);
+		const retryAuth = await requestAuthToken(true);
 		if (!retryAuth.ok) {
 			setStatus("Google authorization failed.", "error");
 			return;
@@ -1351,7 +1297,13 @@ sendSheetsButton.addEventListener("click", async () => {
 				row
 			);
 		} else {
-			response = await appendRow(activeToken, spreadsheetId, sheetName, row);
+			response = await updateRow(
+				activeToken,
+				spreadsheetId,
+				sheetName,
+				newRowIndex,
+				row
+			);
 		}
 	}
 
@@ -1360,22 +1312,98 @@ sendSheetsButton.addEventListener("click", async () => {
 		return;
 	}
 	if (!existingRow) {
-		let appendedRowIndex = null;
+		const targetRowIndex = newRowIndex;
+		const reusedRow = emptyRowInfo.emptyRows.includes(targetRowIndex);
+		setStatus("Formatting in progress...", "");
 		try {
-			const payload = await response.json();
-			appendedRowIndex = getRowIndexFromRange(payload?.updates?.updatedRange);
+			let templateSheetId = null;
+			let targetSheetId = null;
+			const needsTemplate =
+				!reusedRow ||
+				(await rowNeedsTemplateValidation(
+					activeToken,
+					spreadsheetId,
+					sheetName,
+					targetRowIndex
+				));
+			if (targetRowIndex && needsTemplate) {
+				templateSheetId = await ensureTemplateSheet(
+					activeToken,
+					spreadsheetId
+				);
+				const bidderValidation = templateSheetId
+					? await getCellDataValidation(
+							activeToken,
+							spreadsheetId,
+							"__Upwork Template",
+							"C2"
+						)
+					: null;
+				if (
+					templateSheetId &&
+					bidder &&
+					!validationAllowsValue(bidderValidation, bidder)
+				) {
+					templateSheetId = await ensureTemplateSheet(
+						activeToken,
+						spreadsheetId,
+						true
+					);
+				}
+				targetSheetId = await getSheetId(
+					activeToken,
+					spreadsheetId,
+					sheetName
+				);
+				let appliedTemplate = false;
+				if (templateSheetId && targetSheetId !== null) {
+					appliedTemplate = await applyTemplateRowToRows(
+						activeToken,
+						spreadsheetId,
+						templateSheetId,
+						targetSheetId,
+						[targetRowIndex],
+						DEFAULT_HEADER_COUNT
+					);
+				}
+				if (!appliedTemplate) {
+					await applyRowTemplatesInSheet(
+						activeToken,
+						spreadsheetId,
+						sheetName,
+						2,
+						[targetRowIndex],
+						DEFAULT_HEADER_COUNT
+					);
+				}
+				await clearRowsValues(
+					activeToken,
+					spreadsheetId,
+					sheetName,
+					targetRowIndex,
+					targetRowIndex,
+					DEFAULT_HEADER_COUNT
+				);
+				await updateRow(
+					activeToken,
+					spreadsheetId,
+					sheetName,
+					targetRowIndex,
+					row
+				);
+			}
+			const clearUntil = targetRowIndex ? targetRowIndex + 20 : 200;
+			await clearBodyBold(
+				activeToken,
+				spreadsheetId,
+				sheetName,
+				DEFAULT_HEADER_COUNT,
+				clearUntil
+			);
+			setStatus("Row added to Google Sheets.", "success");
 		} catch (error) {
-			appendedRowIndex = null;
+			setStatus("Row added; formatting skipped.", "warn");
 		}
-		const clearUntil = appendedRowIndex ? appendedRowIndex + 20 : 200;
-		await clearBodyBold(
-			activeToken,
-			spreadsheetId,
-			sheetName,
-			23,
-			clearUntil
-		);
-		setStatus("Row added to Google Sheets.", "success");
 		return;
 	}
 	setStatus("Row updated in Google Sheets.", "success");
@@ -1392,23 +1420,19 @@ const loadSheetsSettings = async () => {
 
 loadSheetsSettings();
 
-const loadBidder = () =>
-	new Promise((resolve) => {
-		chrome.storage.sync.get(["bidder"], (result) => {
-			if (chrome.runtime.lastError) {
-				resolve("");
-				return;
-			}
-			resolve(result.bidder || "");
-		});
-	});
+const loadTestingVisibility = async () => {
+	if (typeof getTestingVisibility !== "function") {
+		return;
+	}
+	const visible = await getTestingVisibility();
+	showTestingPanel = Boolean(visible);
+	if (showTestingCheckbox) {
+		showTestingCheckbox.checked = showTestingPanel;
+	}
+	updateTestingVisibility();
+};
 
-const saveBidder = (nextBidder) =>
-	new Promise((resolve) => {
-		chrome.storage.sync.set({ bidder: nextBidder }, () => {
-			resolve(!chrome.runtime.lastError);
-		});
-	});
+loadTestingVisibility();
 
 const setBidder = (nextBidder) => {
 	bidder = String(nextBidder || "").trim();
@@ -1429,33 +1453,86 @@ if (bidderInput) {
 }
 
 loadBidder().then((storedBidder) => {
-	setBidder(storedBidder || "Bilal");
+	setBidder(storedBidder || "");
 });
 setFields(null);
 setButtons();
 
 const refreshMode = async () => {
 	const tab = await queryActiveTab();
+	currentTabUrl = tab?.url || "";
 	const mode = detectModeFromUrl(tab?.url || "");
 	setMode(mode);
 	setButtons();
 	if (mode === "proposals") {
-		setStatus("Open proposals page and click “Check proposal views”.", "");
+		if (!tab || !tab.id || !tab.url) {
+			setStatus("No active tab detected.", "warn");
+			return;
+		}
+
+		setStatus("Scanning proposals page...", "");
+		const scan = await executeProposalScan(tab.id);
+		if (!scan.ok) {
+			setStatus(scan.error || "Unable to scan proposals on this page.", "error");
+			return;
+		}
+
+		const proposals = Array.isArray(scan.proposals) ? scan.proposals : [];
+		const viewed = proposals.filter((item) => item?.viewed && item?.proposalId);
+
+		if (!viewed.length) {
+			setStatus(
+				`Found ${proposals.length} proposal(s), but none viewed by client yet.`,
+				"warn"
+			);
+			return;
+		}
+
+		setStatus(
+			`Found ${viewed.length} viewed proposal(s). Click "Update proposal views" to mark as read.`,
+			"success"
+		);
 		return;
 	}
-	if (!tab || !tab.id || !tab.url) {
+	if (mode === "connects") {
+		if (!tab || !tab.id || !tab.url) {
+			setStatus("No active tab detected.", "warn");
+			return;
+		}
+
+		setStatus("Scanning connects history...", "");
+		const scan = await executeConnectsHistoryScan(tab.id);
+		if (!scan.ok) {
+			setStatus(scan.error || "Unable to scan connects history.", "error");
+			return;
+		}
+		const entries = Array.isArray(scan.entries) ? scan.entries : [];
+		const jobIds = new Set(
+			entries.map((entry) => String(entry?.jobId || "").trim()).filter(Boolean)
+		);
+		if (!entries.length) {
+			setStatus("No connects history entries found.", "warn");
+			return;
+		}
+		setStatus(
+			`Found ${jobIds.size || entries.length} job(s). Click "Update connects history" to save.`,
+			"success"
+		);
+		return;
+	}
+	if (!tab || !tab.id) {
 		setStatus("No active tab detected.", "warn");
-		return;
-	}
-	if (!tab.url.includes("upwork.com")) {
-		setStatus("Open an Upwork job details page to begin.", "");
 		return;
 	}
 
 	setStatus("Reading current tab...", "");
 	const result = await executeExtraction(tab.id);
 	if (!result.ok) {
-		setStatus(result.error || "Unable to read this page.", "error");
+		if (result.error === "No job activity found on this page.") {
+			setStatus("Open an Upwork job details page to begin.", "");
+		} else {
+			setStatus(result.error || "Unable to read this page.", "error");
+		}
 		return;
 	}
 
