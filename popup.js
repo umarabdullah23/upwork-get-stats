@@ -928,6 +928,11 @@ if (checkViewedButton) {
 					);
 				}
 			}
+			await ensureBidderDropdown(
+				auth.token,
+				spreadsheetId,
+				sheetName
+			);
 			setStatus("Connects history updated.", "success");
 		} catch (error) {
 			setStatus("Connects history updated; formatting skipped.", "warn");
@@ -1176,6 +1181,7 @@ prepareSheetButton.addEventListener("click", async () => {
 	await setBodyColumnColors(auth.token, spreadsheetId, sheetName, 1000);
 	await freezeHeaderRow(auth.token, spreadsheetId, sheetName);
 	await ensureJobStatusDropdown(auth.token, spreadsheetId, sheetName);
+	await ensureBidderDropdown(auth.token, spreadsheetId, sheetName);
 	await ensureJobStatusColors(auth.token, spreadsheetId, sheetName);
 	setStatus("Sheet prepared with headers and dropdowns.", "success");
 });
@@ -1392,6 +1398,11 @@ sendSheetsButton.addEventListener("click", async () => {
 					row
 				);
 			}
+			await ensureBidderDropdown(
+				activeToken,
+				spreadsheetId,
+				sheetName
+			);
 			const clearUntil = targetRowIndex ? targetRowIndex + 20 : 200;
 			await clearBodyBold(
 				activeToken,

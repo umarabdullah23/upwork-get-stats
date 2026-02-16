@@ -170,10 +170,12 @@ const DEFAULT_HEADERS = [
 const DEFAULT_HEADER_COUNT = DEFAULT_HEADERS.length;
 window.DEFAULT_HEADER_COUNT = DEFAULT_HEADER_COUNT;
 const TEMPLATE_SHEET_TITLE = "__Upwork Template";
+const TEMPLATE_SOURCE_SHEET_NAME = "reference_data";
 
 const TEMPLATE_SPREADSHEET_ID =
 	"1sV7RYfXd4cNJdnK0ohTnPbxmSp36_dzndUVFjKE0dzQ";
 window.TEMPLATE_SPREADSHEET_ID = TEMPLATE_SPREADSHEET_ID;
+window.TEMPLATE_SOURCE_SHEET_NAME = TEMPLATE_SOURCE_SHEET_NAME;
 
 const getColumnLetter = (index) => {
 	let column = "";
@@ -1278,9 +1280,10 @@ const ensureTemplateSheet = async (token, destinationId, forceRefresh = false) =
 			return null;
 		}
 	}
-	const templateSheetId = await getFirstSheetId(
+	const templateSheetId = await getSheetId(
 		token,
-		TEMPLATE_SPREADSHEET_ID
+		TEMPLATE_SPREADSHEET_ID,
+		TEMPLATE_SOURCE_SHEET_NAME
 	);
 	if (templateSheetId === null) {
 		return null;
@@ -1439,9 +1442,10 @@ const applyRowTemplatesInSheet = async (
 };
 
 const applyTemplateFormatting = async (token, destinationId, destinationName) => {
-	const templateSheetId = await getFirstSheetId(
+	const templateSheetId = await getSheetId(
 		token,
-		TEMPLATE_SPREADSHEET_ID
+		TEMPLATE_SPREADSHEET_ID,
+		TEMPLATE_SOURCE_SHEET_NAME
 	);
 	if (templateSheetId === null) {
 		return { ok: false, error: "Template sheet not found." };
@@ -1616,9 +1620,10 @@ const applyTemplateFormatting = async (token, destinationId, destinationName) =>
 };
 
 const copyTemplateSheet = async (token, destinationId, destinationName) => {
-	const templateSheetId = await getFirstSheetId(
+	const templateSheetId = await getSheetId(
 		token,
-		TEMPLATE_SPREADSHEET_ID
+		TEMPLATE_SPREADSHEET_ID,
+		TEMPLATE_SOURCE_SHEET_NAME
 	);
 	if (templateSheetId === null) {
 		return { ok: false, error: "Template sheet not found." };
