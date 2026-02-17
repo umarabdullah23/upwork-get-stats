@@ -49,11 +49,11 @@ const toCsvRow = (data) =>
 		data.jobId,
 		data.proposals,
 		data.proposalId || "--",
-	data.connectsSpent || "",
-	data.connectsRefund || "",
-	data.boostedConnectsSpent || "",
-	data.boostedConnectsRefund || "",
-]
+		data.connectsSpent || "",
+		data.connectsRefund || "",
+		data.boostedConnectsSpent || "",
+		data.boostedConnectsRefund || "",
+	]
 		.map(formatCsvField)
 		.join(",");
 
@@ -172,8 +172,7 @@ window.DEFAULT_HEADER_COUNT = DEFAULT_HEADER_COUNT;
 const TEMPLATE_SHEET_TITLE = "__Upwork Template";
 const TEMPLATE_SOURCE_SHEET_NAME = "reference_data";
 
-const TEMPLATE_SPREADSHEET_ID =
-	"1sV7RYfXd4cNJdnK0ohTnPbxmSp36_dzndUVFjKE0dzQ";
+const TEMPLATE_SPREADSHEET_ID = "1sV7RYfXd4cNJdnK0ohTnPbxmSp36_dzndUVFjKE0dzQ";
 window.TEMPLATE_SPREADSHEET_ID = TEMPLATE_SPREADSHEET_ID;
 window.TEMPLATE_SOURCE_SHEET_NAME = TEMPLATE_SOURCE_SHEET_NAME;
 
@@ -193,8 +192,8 @@ const getSheetHeaders = async (token, id, name) => {
 	const range = `'${escaped}'!1:1`;
 	const url = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}/values/${encodeURIComponent(range)}`
+			id,
+		)}/values/${encodeURIComponent(range)}`,
 	);
 	const response = await fetch(url.toString(), {
 		headers: { Authorization: `Bearer ${token}` },
@@ -212,7 +211,7 @@ const getSheetRows = async (
 	name,
 	columnCount,
 	startRow = 2,
-	endRow = null
+	endRow = null,
 ) => {
 	const escaped = normalizeSheetName(name).replace(/'/g, "''");
 	const endColumn = getColumnLetter(columnCount || DEFAULT_HEADER_COUNT);
@@ -221,8 +220,8 @@ const getSheetRows = async (
 		: `'${escaped}'!A${startRow}:${endColumn}`;
 	const url = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}/values/${encodeURIComponent(range)}`
+			id,
+		)}/values/${encodeURIComponent(range)}`,
 	);
 	const response = await fetch(url.toString(), {
 		headers: { Authorization: `Bearer ${token}` },
@@ -271,7 +270,7 @@ const getEmptyRowIndexes = async (token, id, name, headers) => {
 			emptyRows.push(rowIndex);
 			if (jobStatusColumns.length) {
 				const values = jobStatusColumns.map(
-					(columnIndex) => rows[i]?.[columnIndex] || ""
+					(columnIndex) => rows[i]?.[columnIndex] || "",
 				);
 				jobStatusValuesByRow.set(rowIndex, values);
 			}
@@ -293,15 +292,15 @@ const getColumnValues = async (
 	name,
 	columnIndex,
 	startRow = 2,
-	options = {}
+	options = {},
 ) => {
 	const escaped = normalizeSheetName(name).replace(/'/g, "''");
 	const letter = getColumnLetter(columnIndex + 1);
 	const range = `'${escaped}'!${letter}${startRow}:${letter}`;
 	const url = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}/values/${encodeURIComponent(range)}`
+			id,
+		)}/values/${encodeURIComponent(range)}`,
 	);
 	if (options.valueRenderOption) {
 		url.searchParams.set("valueRenderOption", options.valueRenderOption);
@@ -322,7 +321,7 @@ const applyRowValidationsToRows = async (
 	name,
 	rowIndexes,
 	headers,
-	sourceSheetId = null
+	sourceSheetId = null,
 ) => {
 	if (!rowIndexes || !rowIndexes.length) {
 		return false;
@@ -379,8 +378,8 @@ const applyRowValidationsToRows = async (
 	});
 	const url = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}:batchUpdate`
+			id,
+		)}:batchUpdate`,
 	);
 	const response = await fetch(url.toString(), {
 		method: "POST",
@@ -398,7 +397,7 @@ const removeBlankHeaderColumn = async (
 	id,
 	name,
 	columnIndex,
-	headerValueToRight
+	headerValueToRight,
 ) => {
 	const headers = await getSheetHeaders(token, id, name);
 	if (!headers) {
@@ -418,9 +417,7 @@ const removeBlankHeaderColumn = async (
 	if (!values) {
 		return false;
 	}
-	const hasData = values.some(
-		(row) => String(row?.[0] || "").trim() !== ""
-	);
+	const hasData = values.some((row) => String(row?.[0] || "").trim() !== "");
 	if (hasData) {
 		return false;
 	}
@@ -430,8 +427,8 @@ const removeBlankHeaderColumn = async (
 	}
 	const url = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}:batchUpdate`
+			id,
+		)}:batchUpdate`,
 	);
 	const requests = [
 		{
@@ -532,8 +529,7 @@ const getAuthToken = (interactive) =>
 		}
 		chrome.identity.getAuthToken({ interactive }, (token) => {
 			if (chrome.runtime.lastError || !token) {
-				const rawMessage =
-					chrome.runtime.lastError?.message || "Auth failed.";
+				const rawMessage = chrome.runtime.lastError?.message || "Auth failed.";
 				const extensionId = chrome?.runtime?.id || "";
 				const normalizedMessage = rawMessage.toLowerCase();
 				if (normalizedMessage.includes("bad client id")) {
@@ -569,8 +565,8 @@ const appendRow = async (token, id, name, row) => {
 	const range = formatRange(name);
 	const url = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}/values/${encodeURIComponent(range)}:append`
+			id,
+		)}/values/${encodeURIComponent(range)}:append`,
 	);
 	url.searchParams.set("valueInputOption", "USER_ENTERED");
 	url.searchParams.set("insertDataOption", "OVERWRITE");
@@ -601,8 +597,8 @@ const findRowByJobId = async (token, id, name, jobId, headers) => {
 	const range = `'${normalizeSheetName(name).replace(/'/g, "''")}'!${column}:${column}`;
 	const url = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}/values/${encodeURIComponent(range)}`
+			id,
+		)}/values/${encodeURIComponent(range)}`,
 	);
 	const response = await fetch(url.toString(), {
 		headers: { Authorization: `Bearer ${token}` },
@@ -634,8 +630,8 @@ const getProposalIdRowMap = async (token, id, name, headers) => {
 	const range = `'${normalizeSheetName(name).replace(/'/g, "''")}'!${column}:${column}`;
 	const url = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}/values/${encodeURIComponent(range)}`
+			id,
+		)}/values/${encodeURIComponent(range)}`,
 	);
 	const response = await fetch(url.toString(), {
 		headers: { Authorization: `Bearer ${token}` },
@@ -686,14 +682,17 @@ const getConnectsRowMap = async (token, id, name, headers) => {
 	}
 	const jobIdIndex = getHeaderIndex(resolvedHeaders, "Job ID");
 	const connectsSpentIndex = getHeaderIndex(resolvedHeaders, "Connects Spent");
-	const connectsRefundIndex = getHeaderIndex(resolvedHeaders, "Connects Refund");
+	const connectsRefundIndex = getHeaderIndex(
+		resolvedHeaders,
+		"Connects Refund",
+	);
 	const boostedConnectsSpentIndex = getHeaderIndex(
 		resolvedHeaders,
-		"Boosted Connects Spent"
+		"Boosted Connects Spent",
 	);
 	const boostedConnectsRefundIndex = getHeaderIndex(
 		resolvedHeaders,
-		"Boosted Connects Refund"
+		"Boosted Connects Refund",
 	);
 	if (!jobIdIndex || !connectsSpentIndex || !connectsRefundIndex) {
 		return null;
@@ -720,8 +719,8 @@ const getConnectsRowMap = async (token, id, name, headers) => {
 	}
 	const url = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}/values:batchGet`
+			id,
+		)}/values:batchGet`,
 	);
 	ranges.forEach((range) => url.searchParams.append("ranges", range));
 	const response = await fetch(url.toString(), {
@@ -792,8 +791,8 @@ const getCellValue = async (token, id, name, cell) => {
 	const range = `'${escaped}'!${cell}`;
 	const url = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}/values/${encodeURIComponent(range)}`
+			id,
+		)}/values/${encodeURIComponent(range)}`,
 	);
 	const response = await fetch(url.toString(), {
 		headers: { Authorization: `Bearer ${token}` },
@@ -813,13 +812,10 @@ const getCellDataValidation = async (token, id, name, cell) => {
 	const escaped = normalized.replace(/'/g, "''");
 	const range = `'${escaped}'!${cell}`;
 	const url = new URL(
-		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(id)}`
+		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(id)}`,
 	);
 	url.searchParams.set("ranges", range);
-	url.searchParams.set(
-		"fields",
-		"sheets.data.rowData.values.dataValidation"
-	);
+	url.searchParams.set("fields", "sheets.data.rowData.values.dataValidation");
 	const response = await fetch(url.toString(), {
 		headers: { Authorization: `Bearer ${token}` },
 	});
@@ -828,9 +824,38 @@ const getCellDataValidation = async (token, id, name, cell) => {
 	}
 	const data = await response.json();
 	return (
-		data?.sheets?.[0]?.data?.[0]?.rowData?.[0]?.values?.[0]
-			?.dataValidation || null
+		data?.sheets?.[0]?.data?.[0]?.rowData?.[0]?.values?.[0]?.dataValidation ||
+		null
 	);
+};
+
+const getValidationListOptions = (dataValidation) => {
+	const condition = dataValidation?.condition;
+	if (!condition) {
+		return null;
+	}
+	const type = String(condition.type || "");
+	if (!type.includes("ONE_OF_LIST")) {
+		return null;
+	}
+	return (condition.values || [])
+		.map((value) => String(value?.userEnteredValue || "").trim())
+		.filter(Boolean);
+};
+
+const validationOptionsMatch = (leftValidation, rightValidation) => {
+	const leftOptions = getValidationListOptions(leftValidation);
+	const rightOptions = getValidationListOptions(rightValidation);
+	if (!leftOptions && !rightOptions) {
+		return true;
+	}
+	if (!leftOptions || !rightOptions) {
+		return false;
+	}
+	if (leftOptions.length !== rightOptions.length) {
+		return false;
+	}
+	return leftOptions.every((value, index) => value === rightOptions[index]);
 };
 
 const setReadCellsViewed = async (token, id, name, rowIndexes, columnIndex) => {
@@ -841,12 +866,11 @@ const setReadCellsViewed = async (token, id, name, rowIndexes, columnIndex) => {
 	if (sheetId === null) {
 		return false;
 	}
-	const startColumnIndex =
-		typeof columnIndex === "number" ? columnIndex : 6;
+	const startColumnIndex = typeof columnIndex === "number" ? columnIndex : 6;
 	const url = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}:batchUpdate`
+			id,
+		)}:batchUpdate`,
 	);
 	const green = { red: 0.8, green: 0.95, blue: 0.8 };
 	const requests = rowIndexes.map((rowIndex) => ({
@@ -884,8 +908,8 @@ const updateRow = async (token, id, name, rowIndex, row) => {
 	const range = `'${escaped}'!A${rowIndex}:${endColumn}${rowIndex}`;
 	const url = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}/values/${encodeURIComponent(range)}`
+			id,
+		)}/values/${encodeURIComponent(range)}`,
 	);
 	url.searchParams.set("valueInputOption", "USER_ENTERED");
 	return fetch(url.toString(), {
@@ -904,8 +928,8 @@ const batchUpdateValues = async (token, id, ranges) => {
 	}
 	const url = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}/values:batchUpdate`
+			id,
+		)}/values:batchUpdate`,
 	);
 	url.searchParams.set("valueInputOption", "USER_ENTERED");
 	return fetch(url.toString(), {
@@ -924,15 +948,15 @@ const updateConnectsColumns = async (
 	name,
 	rowIndex,
 	connectsSpent,
-	connectsRefund
+	connectsRefund,
 ) => {
 	const normalized = normalizeSheetName(name);
 	const escaped = normalized.replace(/'/g, "''");
 	const range = `'${escaped}'!X${rowIndex}:Y${rowIndex}`;
 	const url = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}/values/${encodeURIComponent(range)}`
+			id,
+		)}/values/${encodeURIComponent(range)}`,
 	);
 	url.searchParams.set("valueInputOption", "USER_ENTERED");
 	return fetch(url.toString(), {
@@ -954,8 +978,8 @@ const clearRowBold = async (token, id, name, rowIndex, columnCount) => {
 	}
 	const url = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}:batchUpdate`
+			id,
+		)}:batchUpdate`,
 	);
 	const requests = [
 		{
@@ -1007,8 +1031,8 @@ const setHeaders = async (token, id, name) => {
 	const range = formatRange(name);
 	const url = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}/values/${encodeURIComponent(range)}`
+			id,
+		)}/values/${encodeURIComponent(range)}`,
 	);
 	url.searchParams.set("valueInputOption", "RAW");
 	return fetch(url.toString(), {
@@ -1028,8 +1052,8 @@ const setHeaderBold = async (token, id, name, columnCount) => {
 	}
 	const url = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}:batchUpdate`
+			id,
+		)}:batchUpdate`,
 	);
 	const requests = [
 		{
@@ -1079,7 +1103,7 @@ const freezeHeaderRow = async (token, id, name) => {
 	];
 	const response = await fetch(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
+			id,
 		)}:batchUpdate`,
 		{
 			method: "POST",
@@ -1088,7 +1112,7 @@ const freezeHeaderRow = async (token, id, name) => {
 				"Content-Type": "application/json",
 			},
 			body: JSON.stringify({ requests }),
-		}
+		},
 	);
 	return response.ok;
 };
@@ -1100,8 +1124,8 @@ const clearBodyBold = async (token, id, name, columnCount, endRowIndex) => {
 	}
 	const url = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}:batchUpdate`
+			id,
+		)}:batchUpdate`,
 	);
 	const requests = [
 		{
@@ -1186,7 +1210,7 @@ const setBodyColumnColors = async (token, id, name, endRowIndex) => {
 	];
 	const response = await fetch(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
+			id,
 		)}:batchUpdate`,
 		{
 			method: "POST",
@@ -1195,14 +1219,14 @@ const setBodyColumnColors = async (token, id, name, endRowIndex) => {
 				"Content-Type": "application/json",
 			},
 			body: JSON.stringify({ requests }),
-		}
+		},
 	);
 	return response.ok;
 };
 
 const getSheetId = async (token, id, name) => {
 	const url = new URL(
-		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(id)}`
+		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(id)}`,
 	);
 	url.searchParams.set("fields", "sheets.properties");
 	const response = await fetch(url.toString(), {
@@ -1213,14 +1237,14 @@ const getSheetId = async (token, id, name) => {
 	}
 	const data = await response.json();
 	const match = (data.sheets || []).find(
-		(sheet) => sheet?.properties?.title === name
+		(sheet) => sheet?.properties?.title === name,
 	);
 	return match?.properties?.sheetId ?? null;
 };
 
 const getFirstSheetId = async (token, id) => {
 	const url = new URL(
-		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(id)}`
+		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(id)}`,
 	);
 	url.searchParams.set("fields", "sheets.properties");
 	const response = await fetch(url.toString(), {
@@ -1238,8 +1262,8 @@ const clearSheetValues = async (token, id, name, range) => {
 	const target = `'${escaped}'!${range}`;
 	const url = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}/values/${encodeURIComponent(target)}:clear`
+			id,
+		)}/values/${encodeURIComponent(target)}:clear`,
 	);
 	return fetch(url.toString(), {
 		method: "POST",
@@ -1251,20 +1275,60 @@ const clearSheetValues = async (token, id, name, range) => {
 	});
 };
 
-const ensureTemplateSheet = async (token, destinationId, forceRefresh = false) => {
+const ensureTemplateSheet = async (
+	token,
+	destinationId,
+	forceRefresh = false,
+) => {
 	const existingTemplateId = await getSheetId(
 		token,
 		destinationId,
-		TEMPLATE_SHEET_TITLE
+		TEMPLATE_SHEET_TITLE,
 	);
 	if (existingTemplateId !== null && !forceRefresh) {
-		return existingTemplateId;
+		const [
+			referenceBidderValidation,
+			templateBidderValidation,
+			referenceJobStatusValidation,
+			templateJobStatusValidation,
+		] = await Promise.all([
+			getCellDataValidation(
+				token,
+				TEMPLATE_SPREADSHEET_ID,
+				TEMPLATE_SOURCE_SHEET_NAME,
+				"C2",
+			),
+			getCellDataValidation(token, destinationId, TEMPLATE_SHEET_TITLE, "C2"),
+			getCellDataValidation(
+				token,
+				TEMPLATE_SPREADSHEET_ID,
+				TEMPLATE_SOURCE_SHEET_NAME,
+				"L2",
+			),
+			getCellDataValidation(token, destinationId, TEMPLATE_SHEET_TITLE, "L2"),
+		]);
+		const bidderMismatch =
+			referenceBidderValidation &&
+			!validationOptionsMatch(
+				referenceBidderValidation,
+				templateBidderValidation,
+			);
+		const jobStatusMismatch =
+			referenceJobStatusValidation &&
+			!validationOptionsMatch(
+				referenceJobStatusValidation,
+				templateJobStatusValidation,
+			);
+		if (!bidderMismatch && !jobStatusMismatch) {
+			return existingTemplateId;
+		}
+		forceRefresh = true;
 	}
 	if (existingTemplateId !== null && forceRefresh) {
 		const deleteUrl = new URL(
 			`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-				destinationId
-			)}:batchUpdate`
+				destinationId,
+			)}:batchUpdate`,
 		);
 		const deleteResponse = await fetch(deleteUrl.toString(), {
 			method: "POST",
@@ -1283,15 +1347,15 @@ const ensureTemplateSheet = async (token, destinationId, forceRefresh = false) =
 	const templateSheetId = await getSheetId(
 		token,
 		TEMPLATE_SPREADSHEET_ID,
-		TEMPLATE_SOURCE_SHEET_NAME
+		TEMPLATE_SOURCE_SHEET_NAME,
 	);
 	if (templateSheetId === null) {
 		return null;
 	}
 	const copyUrl = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			TEMPLATE_SPREADSHEET_ID
-		)}/sheets/${encodeURIComponent(templateSheetId)}:copyTo`
+			TEMPLATE_SPREADSHEET_ID,
+		)}/sheets/${encodeURIComponent(templateSheetId)}:copyTo`,
 	);
 	const copyResponse = await fetch(copyUrl.toString(), {
 		method: "POST",
@@ -1311,8 +1375,8 @@ const ensureTemplateSheet = async (token, destinationId, forceRefresh = false) =
 	}
 	const updateUrl = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			destinationId
-		)}:batchUpdate`
+			destinationId,
+		)}:batchUpdate`,
 	);
 	const updateResponse = await fetch(updateUrl.toString(), {
 		method: "POST",
@@ -1347,14 +1411,14 @@ const clearRowsValues = async (
 	name,
 	startRowIndex,
 	endRowIndex,
-	columnCount
+	columnCount,
 ) => {
 	const endColumn = getColumnLetter(columnCount || DEFAULT_HEADER_COUNT);
 	return clearSheetValues(
 		token,
 		id,
 		name,
-		`A${startRowIndex}:${endColumn}${endRowIndex}`
+		`A${startRowIndex}:${endColumn}${endRowIndex}`,
 	);
 };
 
@@ -1364,7 +1428,7 @@ const applyTemplateRowToRows = async (
 	sourceSheetId,
 	destinationSheetId,
 	targetRowIndexes,
-	columnCount
+	columnCount,
 ) => {
 	if (!targetRowIndexes || !targetRowIndexes.length) {
 		return false;
@@ -1402,8 +1466,8 @@ const applyTemplateRowToRows = async (
 	});
 	const url = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}:batchUpdate`
+			id,
+		)}:batchUpdate`,
 	);
 	const response = await fetch(url.toString(), {
 		method: "POST",
@@ -1422,7 +1486,7 @@ const applyRowTemplatesInSheet = async (
 	name,
 	sourceRowIndex,
 	targetRowIndexes,
-	columnCount
+	columnCount,
 ) => {
 	if (!targetRowIndexes || !targetRowIndexes.length) {
 		return false;
@@ -1437,15 +1501,19 @@ const applyRowTemplatesInSheet = async (
 		sheetId,
 		sheetId,
 		targetRowIndexes,
-		columnCount
+		columnCount,
 	);
 };
 
-const applyTemplateFormatting = async (token, destinationId, destinationName) => {
+const applyTemplateFormatting = async (
+	token,
+	destinationId,
+	destinationName,
+) => {
 	const templateSheetId = await getSheetId(
 		token,
 		TEMPLATE_SPREADSHEET_ID,
-		TEMPLATE_SOURCE_SHEET_NAME
+		TEMPLATE_SOURCE_SHEET_NAME,
 	);
 	if (templateSheetId === null) {
 		return { ok: false, error: "Template sheet not found." };
@@ -1454,12 +1522,12 @@ const applyTemplateFormatting = async (token, destinationId, destinationName) =>
 	const existingSheetId = await getSheetId(
 		token,
 		destinationId,
-		destinationName
+		destinationName,
 	);
 	const copyUrl = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			TEMPLATE_SPREADSHEET_ID
-		)}/sheets/${encodeURIComponent(templateSheetId)}:copyTo`
+			TEMPLATE_SPREADSHEET_ID,
+		)}/sheets/${encodeURIComponent(templateSheetId)}:copyTo`,
 	);
 	const copyResponse = await fetch(copyUrl.toString(), {
 		method: "POST",
@@ -1502,8 +1570,8 @@ const applyTemplateFormatting = async (token, destinationId, destinationName) =>
 		];
 		const updateUrl = new URL(
 			`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-				destinationId
-			)}:batchUpdate`
+				destinationId,
+			)}:batchUpdate`,
 		);
 		const updateResponse = await fetch(updateUrl.toString(), {
 			method: "POST",
@@ -1521,7 +1589,7 @@ const applyTemplateFormatting = async (token, destinationId, destinationName) =>
 			token,
 			destinationId,
 			destinationName,
-			`A2:${lastColumn}`
+			`A2:${lastColumn}`,
 		);
 		if (!clearResponse.ok) {
 			return { ok: false, status: clearResponse.status };
@@ -1586,8 +1654,8 @@ const applyTemplateFormatting = async (token, destinationId, destinationName) =>
 	});
 	const updateUrl = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			destinationId
-		)}:batchUpdate`
+			destinationId,
+		)}:batchUpdate`,
 	);
 	const updateResponse = await fetch(updateUrl.toString(), {
 		method: "POST",
@@ -1600,8 +1668,8 @@ const applyTemplateFormatting = async (token, destinationId, destinationName) =>
 	if (!updateResponse.ok) {
 		const cleanupUrl = new URL(
 			`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-				destinationId
-			)}:batchUpdate`
+				destinationId,
+			)}:batchUpdate`,
 		);
 		await fetch(cleanupUrl.toString(), {
 			method: "POST",
@@ -1623,18 +1691,22 @@ const copyTemplateSheet = async (token, destinationId, destinationName) => {
 	const templateSheetId = await getSheetId(
 		token,
 		TEMPLATE_SPREADSHEET_ID,
-		TEMPLATE_SOURCE_SHEET_NAME
+		TEMPLATE_SOURCE_SHEET_NAME,
 	);
 	if (templateSheetId === null) {
 		return { ok: false, error: "Template sheet not found." };
 	}
 
-	const existingSheetId = await getSheetId(token, destinationId, destinationName);
+	const existingSheetId = await getSheetId(
+		token,
+		destinationId,
+		destinationName,
+	);
 
 	const copyUrl = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			TEMPLATE_SPREADSHEET_ID
-		)}/sheets/${encodeURIComponent(templateSheetId)}:copyTo`
+			TEMPLATE_SPREADSHEET_ID,
+		)}/sheets/${encodeURIComponent(templateSheetId)}:copyTo`,
 	);
 	const copyResponse = await fetch(copyUrl.toString(), {
 		method: "POST",
@@ -1672,8 +1744,8 @@ const copyTemplateSheet = async (token, destinationId, destinationName) => {
 	if (requests.length) {
 		const updateUrl = new URL(
 			`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-				destinationId
-			)}:batchUpdate`
+				destinationId,
+			)}:batchUpdate`,
 		);
 		const updateResponse = await fetch(updateUrl.toString(), {
 			method: "POST",
@@ -1692,7 +1764,7 @@ const copyTemplateSheet = async (token, destinationId, destinationName) => {
 		token,
 		destinationId,
 		destinationName,
-		"A2:Y"
+		"A2:Y",
 	);
 	if (!clearResponse.ok) {
 		return { ok: false, status: clearResponse.status };
@@ -1712,8 +1784,8 @@ const ensureBidderDropdown = async (token, id, name) => {
 	}
 	const url = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}:batchUpdate`
+			id,
+		)}:batchUpdate`,
 	);
 	const requests = [
 		{
@@ -1758,8 +1830,8 @@ const ensureJobStatusDropdown = async (token, id, name) => {
 	}
 	const url = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}:batchUpdate`
+			id,
+		)}:batchUpdate`,
 	);
 	const requests = [
 		{
@@ -1810,8 +1882,8 @@ const ensureJobStatusColors = async (token, id, name) => {
 	}
 	const url = new URL(
 		`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
-			id
-		)}:batchUpdate`
+			id,
+		)}:batchUpdate`,
 	);
 	const range = {
 		sheetId,

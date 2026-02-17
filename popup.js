@@ -699,7 +699,6 @@ if (checkViewedButton) {
 		const updates = [];
 		const newRowUpdates = [];
 		const headers = connectsMap.headers || [];
-		const activeBidder = String(bidderInput?.value || bidder || "").trim();
 		let jobNameMap;
 		let jobNameMapLoaded = false;
 		let emptyRowInfo;
@@ -801,7 +800,6 @@ if (checkViewedButton) {
 				date: entry.date,
 				name: entry.name,
 				link: entry.link,
-				bidder: activeBidder,
 				jobId: entry.jobId,
 				connectsSpent: formatConnectsValue(entry.connectsSpent, "spent"),
 				connectsRefund: formatConnectsValue(entry.connectsRefund, "refund"),
@@ -870,25 +868,6 @@ if (checkViewedButton) {
 					auth.token,
 					spreadsheetId
 				);
-				const bidderValidation = templateSheetId
-					? await getCellDataValidation(
-							auth.token,
-							spreadsheetId,
-							"__Upwork Template",
-							"C2"
-						)
-					: null;
-				if (
-					templateSheetId &&
-					activeBidder &&
-					!validationAllowsValue(bidderValidation, activeBidder)
-				) {
-					templateSheetId = await ensureTemplateSheet(
-						auth.token,
-						spreadsheetId,
-						true
-					);
-				}
 				let appliedTemplate = false;
 				if (templateSheetId && targetSheetId !== null) {
 					appliedTemplate = await applyTemplateRowToRows(
