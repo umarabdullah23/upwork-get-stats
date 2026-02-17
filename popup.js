@@ -699,7 +699,6 @@ if (checkViewedButton) {
 		const updates = [];
 		const newRowUpdates = [];
 		const headers = connectsMap.headers || [];
-		const activeBidder = String(bidderInput?.value || bidder || "").trim();
 		let jobNameMap;
 		let jobNameMapLoaded = false;
 		let emptyRowInfo;
@@ -801,7 +800,6 @@ if (checkViewedButton) {
 				date: entry.date,
 				name: entry.name,
 				link: entry.link,
-				bidder: activeBidder,
 				jobId: entry.jobId,
 				connectsSpent: formatConnectsValue(entry.connectsSpent, "spent"),
 				connectsRefund: formatConnectsValue(entry.connectsRefund, "refund"),
@@ -870,25 +868,6 @@ if (checkViewedButton) {
 					auth.token,
 					spreadsheetId
 				);
-				const bidderValidation = templateSheetId
-					? await getCellDataValidation(
-							auth.token,
-							spreadsheetId,
-							"__Upwork Template",
-							"C2"
-						)
-					: null;
-				if (
-					templateSheetId &&
-					activeBidder &&
-					!validationAllowsValue(bidderValidation, activeBidder)
-				) {
-					templateSheetId = await ensureTemplateSheet(
-						auth.token,
-						spreadsheetId,
-						true
-					);
-				}
 				let appliedTemplate = false;
 				if (templateSheetId && targetSheetId !== null) {
 					appliedTemplate = await applyTemplateRowToRows(
@@ -928,6 +907,11 @@ if (checkViewedButton) {
 					);
 				}
 			}
+			await ensureBidderDropdown(
+				auth.token,
+				spreadsheetId,
+				sheetName
+			);
 			setStatus("Connects history updated.", "success");
 		} catch (error) {
 			setStatus("Connects history updated; formatting skipped.", "warn");
@@ -1176,6 +1160,7 @@ prepareSheetButton.addEventListener("click", async () => {
 	await setBodyColumnColors(auth.token, spreadsheetId, sheetName, 1000);
 	await freezeHeaderRow(auth.token, spreadsheetId, sheetName);
 	await ensureJobStatusDropdown(auth.token, spreadsheetId, sheetName);
+	await ensureBidderDropdown(auth.token, spreadsheetId, sheetName);
 	await ensureJobStatusColors(auth.token, spreadsheetId, sheetName);
 	setStatus("Sheet prepared with headers and dropdowns.", "success");
 });
@@ -1392,6 +1377,11 @@ sendSheetsButton.addEventListener("click", async () => {
 					row
 				);
 			}
+			await ensureBidderDropdown(
+				activeToken,
+				spreadsheetId,
+				sheetName
+			);
 			const clearUntil = targetRowIndex ? targetRowIndex + 20 : 200;
 			await clearBodyBold(
 				activeToken,
